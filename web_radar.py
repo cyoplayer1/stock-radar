@@ -14,9 +14,7 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-UA += "AppleWebKit/537.36 (KHTML, like Gecko) "
-UA += "Chrome/120.0.0.0 Safari/537.36"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
 # === 2. 核心計算函數 ===
@@ -65,24 +63,36 @@ def analyze_stock_score(ticker, name):
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 成交排行獲取 ===
+# === 3. 成交排行獲取 (整合修正邏輯) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
         if m_type == "TWSE":
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            df = pd.DataFrame(res['tables'][8]['data'])
-            df.columns = res['tables'][8]['fields']
+            stock_data, fields = None, None
+            # 遍歷 tables 尋找包含成交金額的表
+            if 'tables' in res:
+                for table in res['tables']:
+                    if 'fields' in table and '證券代號' in table['fields'] and '成交金額' in table['fields']:
+                        fields = table['fields']
+                        stock_data = table['data']
+                        break
+            if not stock_data: return None
+            df = pd.DataFrame(stock_data, columns=fields)
             df = df[['證券代號', '證券名稱', '成交金額']]
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            df = pd.DataFrame(res.get('aaData', []))
+            stock_data = res.get('aaData', [])
+            if not stock_data: return None
+            df = pd.DataFrame(stock_data)
+            # 自動定位成交金額欄位 (數值轉換後總和最大的通常是成交值)
             df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
             v_col = df_n.sum().idxmax()
             df = df[[0, 1, v_col]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
+            
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         return df.sort_values('值', ascending=False)
     except: return None
@@ -178,16 +188,18 @@ with t3:
     sid = st.text_input("🔍 代號 (如 2330)", value="2330")
     if sid:
         tid = sid + ".TW" if "." not in sid else sid
-        d = yf.Ticker(tid).history(period="1y")
-        if not d.empty:
-            d = calculate_kd(d)
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線')
-            fig.add_trace(k_trace, row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
+        try:
+            d = yf.Ticker(tid).history(period="1y")
+            if not d.empty:
+                d = calculate_kd(d)
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+                k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線')
+                fig.add_trace(k_trace, row=1, col=1)
+                fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+                fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
+        except: st.error("查無此代號資料。")
 
 with t4:
     if st.button("啟動波段掃描"):
@@ -212,18 +224,14 @@ with t5:
                 vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
         if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
 
-# === 第六個分頁：全台股低檔爆量快篩 ===
 with t6:
     st.subheader("🔍 全台股：低檔爆量強勢股偵測")
-    
-    # 邏輯敘述文字區塊
     st.info("""
     💡 **篩選邏輯說明：**
-    1. **位階 (Price Position) < 25%**：股價處於過去半年（180天）最高與最低區間的底部 25% 區域，確保目前不追高。
-    2. **量能爆發 > 1.8 倍**：今日成交量大於過去 5 天平均成交量的 1.8 倍，代表有主力資金進場敲進。
-    3. **流動性篩選**：系統會自動從全台股每日「成交金額排行」前 250 名中進行掃描，避開沒量的小型股。
+    1. **位階 (Price Position) < 25%**：股價處於過去半年底部 25% 區域。
+    2. **量能爆發 > 1.8 倍**：今日成交量大於 5 天平均量 1.8 倍。
+    3. **流動性篩選**：自動從全台股「成交金額排行」前 250 名中掃描。
     """)
-    
     if st.button("🚀 開始全市場大掃描", use_container_width=True):
         st_time = time.time()
         with st.spinner("正在獲取市場資料並分析..."):
@@ -236,14 +244,12 @@ with t6:
             if df_tpex is not None:
                 for _, r in df_tpex.head(100).iterrows():
                     pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
-            
             results = []
             with ThreadPoolExecutor(max_workers=10) as executor:
                 f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
                 for f in as_completed(f_to_s):
                     res = f.result()
                     if res: results.append(res)
-            
             if results:
                 st.success(f"✅ 掃描完成！耗時 {round(time.time()-st_time, 1)} 秒。")
                 st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)

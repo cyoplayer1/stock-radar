@@ -23,8 +23,7 @@ def calculate_kd(df):
     df['9_min'] = df['Low'].rolling(window=9).min()
     df['9_max'] = df['High'].rolling(window=9).max()
     df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
-    k_v, d_v = [], []
-    k, d = 50.0, 50.0
+    k_v, d_v, k, d = [], [], 50.0, 50.0
     for rsv in df['RSV']:
         if pd.isna(rsv):
             k_v.append(50.0); d_v.append(50.0)
@@ -36,47 +35,39 @@ def calculate_kd(df):
     return df
 
 def analyze_stock_score(ticker, name):
-    """雷達評分邏輯 (112檔專用)"""
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period="2y")
         if df.empty or len(df) < 60: return None
-        close = df['Close'].iloc[-1]
-        vol_5d = df['Volume'].tail(5).mean()
-        if vol_5d < 1000000: return None 
+        close, v_5d = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
+        if v_5d < 1000000: return None 
         score, tags = 0, []
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         if close > ma20: score += 20; tags.append("[站上月線]")
         df = calculate_kd(df.copy())
-        dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
-        dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
-        if (dk > dd) and (dyk <= dyd): score += 40; tags.append("[日剛金叉]")
-        elif dk > dd: score += 20; tags.append("[日線偏多]")
+        if df['K'].iloc[-1] > df['D'].iloc[-1]:
+            if df['K'].iloc[-2] <= df['D'].iloc[-2]: score += 40; tags.append("[日剛金叉]")
+            else: score += 20; tags.append("[日線偏多]")
         df_w = df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         df_w = calculate_kd(df_w.copy())
-        wk = df_w['K'].iloc[-1]
-        if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
+        if df_w['K'].iloc[-1] > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
         tid = ticker.replace('.TW', '').replace('.TWO', '')
-        return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
+        return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(df['K'].iloc[-1], 1), '周K': round(df_w['K'].iloc[-1], 1), '5日均量': int(v_5d/1000), 'Sort_Score': score}
     except: return None
 
 def check_low_breakout(ticker, name):
-    """全台股低檔快篩邏輯"""
     try:
         df = yf.Ticker(ticker).history(period="6mo")
         if df.empty or len(df) < 40: return None
-        v_now = df['Volume'].iloc[-1]
-        v_avg = df['Volume'].iloc[-6:-1].mean()
+        v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
         if v_now < v_avg * 1.8: return None
-        low_p, high_p = df['Low'].min(), df['High'].max()
-        curr_p = df['Close'].iloc[-1]
+        low_p, high_p, curr_p = df['Low'].min(), df['High'].max(), df['Close'].iloc[-1]
         price_range = high_p - low_p
         if price_range == 0: return None
         pos = (curr_p - low_p) / price_range
         if pos < 0.25:
             return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now / v_avg, 2), '低檔位置': f"{round(pos * 100, 1)}%", '今日張數': int(v_now / 1000)}
     except: return None
-    return None
 
 @st.cache_data(ttl=300)
 def get_all_market_candidates():
@@ -86,14 +77,14 @@ def get_all_market_candidates():
         r1 = requests.get(u1, headers=HEADERS, verify=False, timeout=10).json()
         df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
         df1['val'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
-        for _, row in df1.sort_values('val', ascending=False).head(150).iterrows():
-            candidates.append((row['證券代號'] + ".TW", row['證券名稱']))
+        for _, r in df1.sort_values('val', ascending=False).head(150).iterrows():
+            candidates.append((r['證券代號'] + ".TW", r['證券名稱']))
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         r2 = requests.get(u2, headers=HEADERS, verify=False, timeout=10).json()
         df2 = pd.DataFrame(r2['aaData'])
         df2['val'] = pd.to_numeric(df2[9].str.replace(',',''), errors='coerce')
-        for _, row in df2.sort_values('val', ascending=False).head(100).iterrows():
-            candidates.append((row[0] + ".TWO", row[1]))
+        for _, r in df2.sort_values('val', ascending=False).head(100).iterrows():
+            candidates.append((r[0] + ".TWO", r[1]))
     except: pass
     return candidates
 
@@ -110,8 +101,7 @@ def get_rank(m_type):
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             df = pd.DataFrame(res.get('aaData', []))
             df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
-            v_col = df_n.sum().idxmax()
-            df = df[[0, 1, v_col]]
+            df = df[[0, 1, df_n.sum().idxmax()]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         df = df.sort_values('值', ascending=False).head(15)
@@ -119,28 +109,105 @@ def get_rank(m_type):
         return df[['證券代號','證券名稱','金額']].reset_index(drop=True)
     except: return None
 
-# === 3. 完整 112 檔名單 ===
+# === 3. 完整名單 ===
 STOCKS = {
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
-    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
-    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
-    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
-    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
-    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
-    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
-    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
-    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
-    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
-    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
-    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
-    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
-    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
-    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
-    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
-    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
-    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
-    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
-    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
-    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
-    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
-    "0050.TW":
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電", "2303.TW": "聯電",
+    "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電", "2337.TW": "旺宏", "3443.TW": "創意",
+    "3661.TW": "世芯KY", "3034.TW": "聯詠", "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY",
+    "3529.TW": "力旺", "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
+    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達", "2324.TW": "仁寶",
+    "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉", "2377.TW": "微星", "3017.TW": "奇鋐",
+    "3324.TW": "雙鴻", "3653.TW": "健策", "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠",
+    "7769.TW": "鴻勁", "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
+    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電", "6213.TW": "聯茂",
+    "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城", "1503.TW": "士電", "1513.TW": "中興電",
+    "1504.TW": "東元", "1605.TW": "華新", "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼",
+    "2027.TW": "大成鋼", "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
+    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航",
+    "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易", "5388.TWO": "中磊", "3380.TW": "明泰",
+    "2345.TW": "智邦", "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金",
+    "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
+    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太", "3293.TWO": "鈊象",
+    "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎", "0050.TW": "台50", "0056.TW": "高股息",
+    "00878.TW": "永續", "00919.TW": "精選高息", "00929.TW": "科技優息", "00713.TW": "高息低波",
+    "006208.TW": "富邦台50", "6789.TW": "采鈺", "6147.TWO": "頎邦"
+}
+
+# === 4. 網頁介面 ===
+st.title("📡 股神系統旗艦整合版")
+tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
+
+with tabs[0]:
+    if st.button("🚀 啟動雷達掃描", use_container_width=True):
+        start_t, res, prc = time.time(), [], 0
+        pb, txt = st.progress(0), st.empty()
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
+            for f in as_completed(futs):
+                prc += 1
+                pb.progress(prc / len(STOCKS))
+                txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
+                if f.result(): res.append(f.result())
+        pb.empty(); txt.empty()
+        st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
+        if res:
+            df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
+            st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
+    if 'df_radar' in st.session_state: st.dataframe(st.session_state['df_radar'], use_container_width=True)
+
+with tabs[1]:
+    if st.button("🔄 刷新排行"): st.cache_data.clear()
+    c1, c2 = st.columns(2)
+    with c1: st.subheader("📈 上市排行"); df1 = get_rank("TWSE"); st.table(df1)
+    with c2: st.subheader("📉 上櫃排行"); df2 = get_rank("TPEx"); st.table(df2)
+
+with tabs[2]:
+    sid = st.text_input("🔍 代號", value="2330")
+    if sid:
+        tid = sid + ".TW" if "." not in sid else sid
+        d = yf.Ticker(tid).history(period="1y")
+        if not d.empty:
+            d = calculate_kd(d)
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+with tabs[3]:
+    if st.button("啟動波段掃描"):
+        brs = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="3mo")
+            if df.empty or len(df) < 20: continue
+            df['MA20'] = df['Close'].rolling(20).mean()
+            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
+            if df['Close'].iloc[-1] > df['UP'].iloc[-1]: brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
+        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
+
+with tabs[4]:
+    if st.button("量能監控"):
+        vls = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="1mo")
+            if df.empty or len(df) < 6: continue
+            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
+            if v_now > v_avg * 1.8: vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
+        if vls: st.dataframe(pd.DataFrame(vls).sort_values('倍數', ascending=False), use_container_width=True)
+
+with tabs[5]:
+    st.subheader("🔍 全台股：低檔爆量快篩")
+    if st.button("🚀 市場全掃描", use_container_width=True):
+        st_t = time.time()
+        with st.spinner("掃描成交前 250 名標的..."):
+            pool, results = get_all_market_candidates(), []
+            with ThreadPoolExecutor(max_workers=10) as ex:
+                futs = {ex.submit(check_low_breakout, t, n): t for t, n in pool}
+                for f in as_completed(futs):
+                    res = f.result()
+                    if res: results.append(res)
+            if results:
+                st.success(f"完成！耗時 {round(time.time()-st_t, 1)} 秒")
+                st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
+            else: st.warning("暫無標的。")

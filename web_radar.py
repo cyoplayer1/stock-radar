@@ -15,14 +15,15 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # === 2. 核心清洗與計算 (解決 TypeError 關鍵) ===
 def clean_it(df):
-    """徹底處理 MultiIndex 問題，避免 TypeError"""
+    """徹底處理資料格式問題，避免 TypeError"""
     if df is None or df.empty: return df
     df = df.copy()
-    # 針對 Python 3.14 / yfinance 格式強制降維
+    # 移除 MultiIndex (yfinance 常見問題)
     if hasattr(df.columns, 'nlevels') and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
-    # 強制數值化，避開 Object 型態錯誤
-    for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+    # 強制轉為純數值型態
+    target_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    for c in target_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
     return df.dropna()
@@ -30,7 +31,8 @@ def clean_it(df):
 def calculate_kd(df):
     df = clean_it(df)
     if len(df) < 9: return df
-    l9, h9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
+    l9 = df['Low'].rolling(9).min()
+    h9 = df['High'].rolling(9).max()
     rsv = (df['Close'] - l9) / (h9 - l9) * 100
     k, d, kl, dl = 50.0, 50.0, [], []
     for v in rsv:
@@ -63,13 +65,13 @@ def get_rk():
         d2 = pd.DataFrame(r2['aaData'])
         d2 = d2.iloc[:, [0, 1, 9]]
         d2.columns = ['代號', '名稱', '金額']
-        d2['v'] = pd.to_numeric(d2[9].str.replace(',',''), 
+        d2['v'] = pd.to_numeric(d2['金額'].str.replace(',',''), 
                                 errors='coerce')
         res["TPEx"] = d2.sort_values('v', ascending=False).head(15)
     except: pass
     return res
 
-# === 3. 完整 112 檔名單 (防截斷排版) ===
+# === 3. 核心 112 檔名單 (垂直短行排版) ===
 SL = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", 
     "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", 
@@ -106,8 +108,8 @@ SL = {
     "6147.TWO": "頎邦"
 }
 
-# === 4. 網頁介面 ===
-st.title("📡 股神旗艦整合 V13.0")
+# === 4. 介面設計 ===
+st.title("📡 股神旗艦整合 V14.0")
 tbs = st.tabs(["🎯 雷達評分", "💰 成交排行", "📈 互動看盤", 
                "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
 
@@ -150,10 +152,8 @@ with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 核心修復：強制單層結構
-        d_raw = yf.download(tid, period="1y", multi_level_index=False, 
-                            silent=True)
-        d = clean_it(d_raw)
+        # 核心修復：使用 .history 避開 download 的 TypeError 
+        d = clean_it(yf.Ticker(tid).history(period="1y"))
         if not d.empty:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
@@ -172,10 +172,11 @@ with tbs[2]:
 with tbs[5]:
     st.subheader("🔍 全台股：低檔爆量偵測")
     if st.button("🚀 開始全市場掃描"):
-        with st.spinner("掃描前 250 名標的..."):
+        with st.spinner("掃描前 250 名熱門標的..."):
             rk_m = get_rk()
             cands = [str(x) + ".TW" for x in rk_m["TWSE"]['代號']] + \
                     [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
+            # 批次下載時使用 group_by='ticker' 提高穩定性
             raw_m = yf.download(cands, period="6mo", group_by='ticker', 
                                 silent=True)
             res_l = []

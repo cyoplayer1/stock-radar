@@ -60,19 +60,10 @@ def analyze_stock_score(ticker, name):
         if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
         
         tid = ticker.replace('.TW', '').replace('.TWO', '')
-        return {
-            '標的': f"{tid} {name}", 
-            '評分': f"{score}分", 
-            '收盤': round(close, 2), 
-            '狀態': " + ".join(tags) if tags else "休息", 
-            '日K': round(dk, 1), 
-            '周K': round(wk, 1), 
-            '5日均量': int(vol_5d/1000), 
-            'Sort_Score': score
-        }
+        return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 數據抓取 ===
+# === 3. 數據獲取與排行 ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -117,7 +108,7 @@ def get_chip_data():
             return df
     except: return None
 
-# === 4. 快篩邏輯與名單 ===
+# === 4. 快篩邏輯與 112 檔名單 ===
 def check_low_breakout(ticker, name):
     try:
         df = yf.Ticker(ticker).history(period="6mo")
@@ -159,7 +150,7 @@ STOCKS = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦"
 }
 
-# === 5. 介面佈局 ===
+# === 5. 介面設計 ===
 tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 低檔快篩", "💎 籌碼大數據", "📺 多圖連動"])
 
 with tabs[0]:
@@ -176,10 +167,10 @@ with tabs[0]:
         pb.empty(); txt.empty()
         if res:
             df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
-            # 💡 重點修正：在標的前面加入排名編號
-            df.insert(0, '排名', range(1, len(df) + 1))
-            df['標的'] = df['排名'].astype(str) + ". " + df['標的']
-            st.session_state['df_radar'] = df.drop(columns=['Sort_Score', '排名']).head(35)
+            df_top30 = df.head(30).copy()
+            df_top30.insert(0, '排名', range(1, len(df_top30) + 1))
+            df_top30['標的'] = df_top30['排名'].astype(str) + ". " + df_top30['標的']
+            st.session_state['df_radar'] = df_top30.drop(columns=['Sort_Score', '排名'])
     
     if 'df_radar' in st.session_state:
         st.dataframe(st.session_state['df_radar'], use_container_width=True)
@@ -239,6 +230,15 @@ with tabs[4]:
         if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
 
 with tabs[5]:
+    st.subheader("🔍 全台股：低檔爆量強勢股偵測")
+    # --- 這裡加入第六分頁的完整文字敘述 ---
+    st.info("""
+    💡 **篩選邏輯說明：**
+    1. **位階 (Price Position) < 25%**：股價處於過去半年（180天）最高與最低區間的底部 25% 區域，確保目前不追高。
+    2. **量能爆發 > 1.8 倍**：今日成交量大於過去 5 天平均成交量的 1.8 倍，代表有主力資金進場敲進。
+    3. **流動性篩選**：系統會自動從全台股每日「成交金額排行」前 250 名中進行掃描，避開沒量的小型股。
+    """)
+    
     if st.button("🚀 開始全市場大掃篩選", use_container_width=True):
         pool, results = [], []
         df_twse, df_tpex = get_rank("TWSE"), get_rank("TPEx")
@@ -250,7 +250,7 @@ with tabs[5]:
             f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
             for f in as_completed(f_to_s):
                 if f.result(): results.append(f.result())
-        if results: st.dataframe(pd.DataFrame(results).sort_values('今日張數', ascending=False), use_container_width=True)
+        if results: st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
 
 with tabs[6]:
     st.subheader("💎 三大法人昨日買賣超排行榜")

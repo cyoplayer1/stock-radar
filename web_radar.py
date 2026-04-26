@@ -50,7 +50,6 @@ def calculate_bollinger(df):
     return df
 
 def analyze_stock_score(ticker, stock_name):
-    """第一分頁：技術面評分系統"""
     try:
         stock = yf.Ticker(ticker)
         df_daily = stock.history(period="1y")
@@ -95,7 +94,6 @@ def analyze_stock_score(ticker, stock_name):
         return None
 
 def analyze_bollinger_breakout(ticker, stock_name):
-    """第四分頁：布林通道爆發策略"""
     try:
         df = yf.Ticker(ticker).history(period="6mo")
         df.dropna(subset=['Close'], inplace=True)
@@ -124,7 +122,6 @@ def analyze_bollinger_breakout(ticker, stock_name):
         return None
 
 def analyze_etf_yield(ticker, name):
-    """第四分頁：高息ETF乖離率計算"""
     try:
         df = yf.Ticker(ticker).history(period="3mo")
         df.dropna(subset=['Close'], inplace=True)
@@ -147,133 +144,4 @@ def analyze_etf_yield(ticker, name):
         return None
 
 def analyze_volume_breakout(ticker, stock_name):
-    """第五分頁：異常爆量買賣監控"""
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="1mo")
-        df.dropna(subset=['Close', 'Volume'], inplace=True)
-        if len(df) < 6: 
-            return None
-
-        vol_today = df['Volume'].iloc[-1]
-        vol_5ma = df['Volume'].iloc[-6:-1].mean() 
-        close_today = df['Close'].iloc[-1]
-        open_today = df['Open'].iloc[-1]
-        close_yest = df['Close'].iloc[-2]
-
-        if vol_5ma < 500000: 
-            return None
-
-        vol_ratio = vol_today / vol_5ma if vol_5ma > 0 else 0
-
-        if vol_ratio > 1.5:
-            status = ""
-            if close_today > open_today and close_today > close_yest:
-                status = "🔥 爆量上漲 (買盤湧入)"
-            elif close_today < open_today and close_today < close_yest:
-                status = "🩸 爆量下跌 (賣壓出籠)"
-            else:
-                status = "⚠️ 爆量震盪 (多空交戰)"
-
-            clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
-            return {
-                '標的名稱': f"{clean_ticker} {stock_name}",
-                '收盤價': round(close_today, 2),
-                '今日成交量(張)': int(vol_today / 1000),
-                '5日均量(張)': int(vol_5ma / 1000),
-                '爆量倍數': round(vol_ratio, 1),
-                '異動狀態': status
-            }
-        return None
-    except Exception: 
-        return None
-
-# ================= 股市排行系統 函數 =================
-@st.cache_data(ttl=300)
-def get_twse_top_15():
-    try:
-        res = requests.get("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", headers=HEADERS, verify=False, timeout=10)
-        data = res.json()
-        stock_data, fields = None, None
-        if 'tables' in data:
-            for table in data['tables']:
-                if 'fields' in table and 'data' in table:
-                    if '證券代號' in table['fields'] and '成交金額' in table['fields']:
-                        fields, stock_data = table['fields'], table['data']
-                        break
-        if not stock_data:
-            for key, val in data.items():
-                if key.startswith('fields') and isinstance(val, list):
-                    if '證券代號' in val and '成交金額' in val:
-                        data_key = key.replace('fields', 'data')
-                        if data_key in data:
-                            fields, stock_data = val, data[data_key]
-                            break
-        if not stock_data: 
-            return None, data.get('stat', '找不到上市資料')
-            
-        df = pd.DataFrame(stock_data, columns=fields)[['證券代號', '證券名稱', '成交金額']]
-        df['成交金額'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        df_sorted = df.sort_values(by='成交金額', ascending=False).head(15)
-        df_sorted['成交金額(元)'] = df_sorted['成交金額'].apply(lambda x: f"{int(x):,}")
-        df_sorted.index = range(1, 16)
-        return df_sorted.drop(columns=['成交金額']), "OK"
-    except Exception as e: 
-        return None, f"上市錯誤: {e}"
-
-@st.cache_data(ttl=300)
-def get_tpex_top_15():
-    try:
-        res = requests.get("https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json", headers=HEADERS, verify=False, timeout=10)
-        data = res.json()
-        stock_data = []
-        if 'aaData' in data and data['aaData']: 
-            stock_data = data['aaData']
-        elif 'tables' in data:
-            for table in data['tables']:
-                if 'data' in table and len(table['data']) > 0:
-                    stock_data = table['data']
-                    break
-        if not stock_data: 
-            return None, "找不到上櫃資料"
-            
-        df = pd.DataFrame(stock_data)
-        col_val = 9 if df.shape[1] >= 10 else df.shape[1] - 2
-        df = df[[0, 1, col_val]]
-        df.columns = ['證券代號', '證券名稱', '成交金額']
-        df['成交金額'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-        df_sorted = df.sort_values(by='成交金額', ascending=False).head(15)
-        df_sorted['成交金額(元)'] = df_sorted['成交金額'].apply(lambda x: f"{int(x):,}")
-        df_sorted.index = range(1, 16)
-        return df_sorted.drop(columns=['成交金額']), "OK"
-    except Exception as e: 
-        return None, f"上櫃錯誤: {e}"
-
-# ================= 名單設定 =================
-STOCKS = {
-    # 權值與半導體
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", 
-    "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", 
-    "2408.TW": "南亞科", "2344.TW": "華邦電", "2337.TW": "旺宏", 
-    "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠", 
-    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", 
-    "3529.TW": "力旺", "6488.TWO": "環球晶", "5483.TWO": "中美晶", 
-    "3105.TWO": "穩懋", "8299.TWO": "群聯",
-    
-    # AI 伺服器與電腦周邊
-    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", 
-    "2356.TW": "英業達", "2324.TW": "仁寶", "2353.TW": "宏碁", 
-    "2357.TW": "華碩", "2376.TW": "技嘉", "2377.TW": "微星", 
-    "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策", 
-    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠",
-    "7769.TW": "鴻勁",
-    
-    # PCB 與電子零組件
-    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", 
-    "2368.TW": "金像電", "4958.TW": "臻鼎KY", "2313.TW": "華通", 
-    "6274.TWO": "台燿", "2383.TW": "台光電", "6213.TW": "聯茂", 
-    "3008.TW": "大立光", "3406.TW": "玉晶光",
-    
-    # 重電、綠能與傳產
-    "1519.TW": "華城", "1503.TW": "士電", "1513.TW": "中興電", 
-    "1504.TW": "東元", "

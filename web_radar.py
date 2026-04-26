@@ -9,6 +9,98 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 
+# === 1. 系統設定 ===
+warnings.filterwarnings("ignore")
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
+
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+HEADERS = {"User-Agent": UA}
+
+# === 2. 核心快篩邏輯 ===
+def check_low_breakout(ticker, name):
+    try:
+        # 抓取 6 個月資料來判斷高低位
+        df = yf.Ticker(ticker).history(period="6mo")
+        if df.empty or len(df) < 40: return None
+        
+        # 1. 量能條件：今日量 > 5日均量 1.8 倍
+        v_now = df['Volume'].iloc[-1]
+        v_avg = df['Volume'].iloc[-6:-1].mean()
+        if v_now < v_avg * 1.8: return None
+        
+        # 2. 低檔條件：股價在半年高低區間的 25% 以下
+        low_p = df['Low'].min()
+        high_p = df['High'].max()
+        curr_p = df['Close'].iloc[-1]
+        price_range = high_p - low_p
+        if price_range == 0: return None
+        pos = (curr_p - low_p) / price_range
+        
+        if pos < 0.25: # 符合低檔爆量
+            return {
+                '代號名稱': f"{ticker.split('.')[0]} {name}",
+                '收盤價': round(curr_p, 2),
+                '量能倍數': round(v_now / v_avg, 2),
+                '低檔位置': f"{round(pos * 100, 1)}%",
+                '今日張數': int(v_now / 1000)
+            }
+    except: return None
+    return None
+
+@st.cache_data(ttl=300)
+def get_all_market_candidates():
+    """從交易所 API 抓取當天成交量大的前 200 名作為篩選池"""
+    candidates = []
+    try:
+        # 上市
+        u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
+        r1 = requests.get(u1, headers=HEADERS, verify=False, timeout=10).json()
+        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
+        df1['val'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
+        # 取成交金額前 150 名
+        for _, row in df1.sort_values('val', ascending=False).head(150).iterrows():
+            candidates.append((row['證券代號'] + ".TW", row['證券名稱']))
+            
+        # 上櫃
+        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
+        r2 = requests.get(u2, headers=HEADERS, verify=False, timeout=10).json()
+        df2 = pd.DataFrame(r2['aaData'])
+        df2['val'] = pd.to_numeric(df2[9].str.replace(',',''), errors='coerce')
+        # 取成交金額前 100 名
+        for _, row in df2.sort_values('val', ascending=False).head(100).iterrows():
+            candidates.append((row[0] + ".TWO", row[1]))
+    except: pass
+    return candidates
+
+# === 3. 介面設定 (Tab 6) ===
+st.title("📡 股神系統整合旗艦版")
+tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
+
+# ... 前面 1-5 個分頁保持原本邏輯 ...
+
+with tabs[5]:
+    st.subheader("🔍 全台股：低檔爆量強勢股搜尋")
+    st.info("邏輯：從全台股成交金額前 250 名中，自動偵測「量能翻倍」且「價格在半年低點」的標的。")
+    
+    if st.button("🚀 開始全市場掃描", use_container_width=True):
+        start_t = time.time()
+        with st.spinner("正在獲取市場資料並進行多線程分析..."):
+            pool = get_all_market_candidates()
+            results = []
+            
+            # 使用多線程加速抓取 yfinance 資料
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_stock = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
+                for future in as_completed(future_to_stock):
+                    res = future.result()
+                    if res: results.append(res)
+            
+            if results:
+                st.success(f"掃描完成！耗時 {round(time.time()-start_t, 1)} 秒")
+                st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
+            else:
+                st.warning("今日全台股成交前 250 名中，暫無符合低檔爆量（位置 < 25% 且量增 1.8 倍）的標的。")
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

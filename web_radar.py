@@ -40,8 +40,16 @@ def calculate_kd(df):
     df['K'], df['D'] = k_values, d_values
     return df
 
+def calculate_bollinger(df):
+    """計算布林通道"""
+    df['20MA'] = df['Close'].rolling(window=20).mean()
+    df['STD'] = df['Close'].rolling(window=20).std()
+    df['UPPER'] = df['20MA'] + (2 * df['STD'])
+    df['LOWER'] = df['20MA'] - (2 * df['STD'])
+    return df
+
 def analyze_stock_score(ticker, stock_name):
-    """技術面評分系統"""
+    """第一分頁：技術面評分系統"""
     try:
         stock = yf.Ticker(ticker)
         df_daily = stock.history(period="1y")
@@ -84,14 +92,64 @@ def analyze_stock_score(ticker, stock_name):
         }
     except: return None
 
+def analyze_bollinger_breakout(ticker, stock_name):
+    """第四分頁：布林通道爆發策略"""
+    try:
+        df = yf.Ticker(ticker).history(period="6mo")
+        df.dropna(subset=['Close'], inplace=True)
+        if len(df) < 20: return None
+        
+        df = calculate_bollinger(df)
+        close = df['Close'].iloc[-1]
+        upper = df['UPPER'].iloc[-1]
+        ma20 = df['20MA'].iloc[-1]
+        
+        # 判斷突破上軌
+        is_breakout = close > upper
+        bandwidth = ((upper - df['LOWER'].iloc[-1]) / ma20) * 100
+        
+        if is_breakout:
+            clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
+            return {
+                '標的名稱': f"{clean_ticker} {stock_name}",
+                '收盤價': round(close, 2),
+                '上軌價位': round(upper, 2),
+                '通道寬度(%)': round(bandwidth, 1),
+                '狀態': '🔥 突破上軌 (強勢爆發)'
+            }
+        return None
+    except: return None
+
+def analyze_etf_yield(ticker, name):
+    """第四分頁：高息ETF乖離率計算"""
+    try:
+        df = yf.Ticker(ticker).history(period="3mo")
+        df.dropna(subset=['Close'], inplace=True)
+        if len(df) < 20: return None
+        
+        close = df['Close'].iloc[-1]
+        ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
+        bias = ((close - ma20) / ma20) * 100 # 月線乖離率
+        
+        return {
+            "ETF名稱": name,
+            "收盤價": round(close, 2),
+            "月線(20MA)": round(ma20, 2),
+            "乖離率(%)": round(bias, 2),
+            "進場判定": "🟢 折價 (適合分批建倉)" if bias < 0 else "🔴 溢價 (建議觀望)"
+        }
+    except: return None
+
 # ================= 股市排行系統 函數 (加入快取機制) =================
 @st.cache_data(ttl=300)
 def get_twse_top_15():
+    """獲取上市（TWSE）成交值前 15 大股票"""
     url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
     try:
         res = requests.get(url, headers=HEADERS, verify=False, timeout=10)
         data = res.json()
         stock_data, fields = None, None
+        
         if 'tables' in data:
             for table in data['tables']:
                 if 'fields' in table and 'data' in table:
@@ -99,6 +157,7 @@ def get_twse_top_15():
                         fields = table['fields']
                         stock_data = table['data']
                         break
+        
         if not stock_data:
             for key, val in data.items():
                 if key.startswith('fields') and isinstance(val, list):
@@ -108,6 +167,7 @@ def get_twse_top_15():
                             fields = val
                             stock_data = data[data_key]
                             break
+        
         if not stock_data: return None, data.get('stat', '找不到上市股票資料')
 
         df = pd.DataFrame(stock_data, columns=fields)
@@ -123,6 +183,7 @@ def get_twse_top_15():
 
 @st.cache_data(ttl=300)
 def get_tpex_top_15():
+    """獲取上櫃（TPEx）成交值前 15 大股票"""
     url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
     try:
         res = requests.get(url, headers=HEADERS, verify=False, timeout=10)
@@ -188,21 +249,16 @@ STOCKS = {
     "8441.TW": "可寧衛", "8390.TWO": "金益鼎"
 }
 
-# ================= 視覺化上色函數 =================
-def style_stock_dataframe(val):
-    """台股習慣：紅色代表強勢/上漲，綠色代表弱勢/下跌"""
-    if isinstance(val, str):
-        if any(keyword in val for keyword in ['金叉', '多', '站上']):
-            return 'color: #ff4b4b; font-weight: bold;'
-        elif any(keyword in val for keyword in ['空', '休息']):
-            return 'color: #00fa9a;'
-    return ''
+ETF_LIST = {
+    "0056.TW": "元大高股息", "00878.TW": "國泰永續高股息", "00919.TW": "群益台灣精選高息", 
+    "00929.TW": "復華台灣科技優息", "00713.TW": "元大台灣高息低波", "00731.TW": "復華富時高息低波"
+}
 
 # ================= 網頁主畫面配置 =================
-st.title("📡 綜合投資分析站 V3.0")
+st.title("📡 綜合投資分析站 V4.0")
 
-# 建立三個標籤頁
-tab1, tab2, tab3 = st.tabs(["🎯 股神系統雷達", "💰 股市成交排行", "📈 互動看盤分析"])
+# 建立四個標籤頁
+tab1, tab2, tab3, tab4 = st.tabs(["🎯 股神系統雷達", "💰 股市成交排行", "📈 互動看盤分析", "🚀 終極波段與高息存股"])
 
 # ----------------- 第一頁：股神系統雷達 -----------------
 with tab1:
@@ -234,104 +290,4 @@ with tab1:
         
         progress_bar.empty()
         status_text.empty()
-        st.success(f"✅ 掃描完成！總耗時 {round(end_time - start_time, 1)} 秒。")
-        
-        if scored_stocks:
-            df_result = pd.DataFrame(scored_stocks)
-            df_result = df_result.sort_values(by=['評分', '日K'], ascending=[False, False])
-            df_result['評分'] = df_result['評分'].astype(str) + "分"
-            df_result = df_result.head(30)
-            df_result.index = range(1, len(df_result) + 1)
-            
-            st.subheader("🔥 目前大盤最強的 30 檔標的")
-            # 隱藏用不到的 ticker 欄位並上色 (使用 map 函數)
-            styled_df = df_result.drop(columns=['ticker']).style.map(style_stock_dataframe, subset=['技術面狀態'])
-            st.dataframe(styled_df, use_container_width=True)
-        else:
-            st.error("連資料都抓不到，可能是網路連線問題。")
-
-# ----------------- 第二頁：股市排行 -----------------
-with tab2:
-    st.markdown("### 台股前 15 大成交值排行榜")
-    st.markdown("*(資料每 5 分鐘自動快取更新，保護伺服器不被封鎖)*")
-    st.markdown("---")
-    
-    if st.button('🔄 強制重新抓取排行數據'):
-        st.cache_data.clear()
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("📈 上市 (TWSE)")
-        with st.spinner("抓取上市資料中..."):
-            df_twse, msg_twse = get_twse_top_15()
-            if df_twse is not None:
-                st.dataframe(df_twse, use_container_width=True)
-            else:
-                st.error(msg_twse)
-
-    with col2:
-        st.subheader("📉 上櫃 (TPEx)")
-        with st.spinner("抓取上櫃資料中..."):
-            df_tpex, msg_tpex = get_tpex_top_15()
-            if df_tpex is not None:
-                st.dataframe(df_tpex, use_container_width=True)
-            else:
-                st.error(msg_tpex)
-
-# ----------------- 第三頁：互動看盤分析 -----------------
-with tab3:
-    st.markdown("### 📊 專業互動式 K 線看盤區")
-    st.markdown("---")
-    
-    col_input, _ = st.columns([1, 3])
-    with col_input:
-        stock_input = st.text_input("輸入台股代號 (例如: 2330 或 00919)", value="2330")
-        period = st.selectbox("選擇觀察區間", ["3個月", "6個月", "1年", "2年"], index=1)
-    
-    period_map = {"3個月": "3mo", "6個月": "6mo", "1年": "1y", "2年": "2y"}
-    # 處理台股代號邏輯 (自動補上 .TW，如果是上櫃股票請自行輸入 .TWO)
-    if "." not in stock_input:
-        ticker_full = stock_input + ".TW"
-    else:
-        ticker_full = stock_input
-    
-    with st.spinner("圖表載入中..."):
-        try:
-            data = yf.Ticker(ticker_full).history(period=period_map[period])
-            if data.empty:
-                st.warning("查無資料！如果是上櫃股票，請在代號後加上 `.TWO` (例如: 8299.TWO)")
-            else:
-                data = calculate_kd(data)
-                data['5MA'] = data['Close'].rolling(window=5).mean()
-                data['20MA'] = data['Close'].rolling(window=20).mean()
-                data['60MA'] = data['Close'].rolling(window=60).mean()
-                
-                # 建立上下兩個子圖 (K線區 70%，KD區 30%)
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-                
-                # 上圖：K線與均線
-                fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name='K線'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=data.index, y=data['5MA'], line=dict(color='white', width=1), name='5MA'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=data.index, y=data['20MA'], line=dict(color='orange', width=1.5), name='20MA'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=data.index, y=data['60MA'], line=dict(color='cyan', width=1), name='60MA'), row=1, col=1)
-                
-                # 下圖：KD指標
-                fig.add_trace(go.Scatter(x=data.index, y=data['K'], line=dict(color='#ffeb3b', width=1.5), name='K值'), row=2, col=1)
-                fig.add_trace(go.Scatter(x=data.index, y=data['D'], line=dict(color='#03a9f4', width=1.5), name='D值'), row=2, col=1)
-                fig.add_hline(y=80, line_dash="dash", line_color="#ff4b4b", row=2, col=1)
-                fig.add_hline(y=20, line_dash="dash", line_color="#00fa9a", row=2, col=1)
-                
-                # 調整圖表外觀
-                fig.update_layout(
-                    height=700, 
-                    template="plotly_dark", 
-                    xaxis_rangeslider_visible=False, 
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    hovermode="x unified"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-        except Exception as e:
-            st.error(f"繪圖發生錯誤: {e}")
+        st.success(f"✅ 掃描完成！總耗時

@@ -63,7 +63,7 @@ def analyze_stock_score(ticker, name):
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 成交排行獲取 (整合修正邏輯) ===
+# === 3. 成交排行獲取 (修正後的穩定邏輯) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -71,7 +71,7 @@ def get_rank(m_type):
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data, fields = None, None
-            # 遍歷 tables 尋找包含成交金額的表
+            # 自動搜尋包含證券代號與成交金額的表格
             if 'tables' in res:
                 for table in res['tables']:
                     if 'fields' in table and '證券代號' in table['fields'] and '成交金額' in table['fields']:
@@ -84,15 +84,17 @@ def get_rank(m_type):
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
+            # 優先從 aaData 獲取上櫃資料
             stock_data = res.get('aaData', [])
             if not stock_data: return None
             df = pd.DataFrame(stock_data)
-            # 自動定位成交金額欄位 (數值轉換後總和最大的通常是成交值)
+            # 自動識別成交金額欄位位置
             df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
             v_col = df_n.sum().idxmax()
             df = df[[0, 1, v_col]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
             
+        # 處理包含逗號或橫槓的數值字串
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         return df.sort_values('值', ascending=False)
     except: return None

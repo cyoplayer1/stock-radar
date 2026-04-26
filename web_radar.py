@@ -42,26 +42,22 @@ def analyze_stock_score(ticker, name):
         if df.empty or len(df) < 60: return None
         close = df['Close'].iloc[-1]
         vol_5d = df['Volume'].tail(5).mean()
-        if vol_5d < 1000000: return None # 5日均量小於1000張排除
+        if vol_5d < 1000000: return None
         
         score, tags = 0, []
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        if close > ma20: 
-            score += 20; tags.append("[站上月線]")
+        if close > ma20: score += 20; tags.append("[站上月線]")
         
         df = calculate_kd(df.copy())
         dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
         dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
-        if (dk > dd) and (dyk <= dyd): 
-            score += 40; tags.append("[日剛金叉]")
-        elif dk > dd: 
-            score += 20; tags.append("[日線偏多]")
+        if (dk > dd) and (dyk <= dyd): score += 40; tags.append("[日剛金叉]")
+        elif dk > dd: score += 20; tags.append("[日線偏多]")
         
         df_w = df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         df_w = calculate_kd(df_w.copy())
         wk = df_w['K'].iloc[-1]
-        if wk > df_w['D'].iloc[-1]: 
-            score += 40; tags.append("[周線偏多]")
+        if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
         
         tid = ticker.replace('.TW', '').replace('.TWO', '')
         return {
@@ -76,7 +72,7 @@ def analyze_stock_score(ticker, name):
         }
     except: return None
 
-# === 3. 成交排行與籌碼數據 ===
+# === 3. 數據抓取 ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -113,7 +109,6 @@ def get_chip_data():
         res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
         if 'data' in res:
             df = pd.DataFrame(res['data'])
-            # 欄位索引可能隨交易所調整，採前幾個固定欄位
             df = df.iloc[:, [0, 1, 2, 10, 11]]
             df.columns = ['代號', '名稱', '外資', '投信', '自營']
             for col in ['外資', '投信', '自營']:
@@ -122,7 +117,7 @@ def get_chip_data():
             return df
     except: return None
 
-# === 4. 快篩邏輯 ===
+# === 4. 快篩邏輯與名單 ===
 def check_low_breakout(ticker, name):
     try:
         df = yf.Ticker(ticker).history(period="6mo")
@@ -133,12 +128,7 @@ def check_low_breakout(ticker, name):
         curr_p = df['Close'].iloc[-1]
         pos = (curr_p - low_p) / (high_p - low_p) if high_p != low_p else 1
         if pos < 0.25:
-            return {
-                '代號名稱': f"{ticker.split('.')[0]} {name}", 
-                '收盤價': round(curr_p, 2), 
-                '量能倍數': round(v_now/v_avg, 2), 
-                '今日張數': int(v_now/1000)
-            }
+            return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now/v_avg, 2), '今日張數': int(v_now/1000)}
     except: return None
 
 STOCKS = {
@@ -186,7 +176,10 @@ with tabs[0]:
         pb.empty(); txt.empty()
         if res:
             df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
-            st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
+            # 💡 重點修正：在標的前面加入排名編號
+            df.insert(0, '排名', range(1, len(df) + 1))
+            df['標的'] = df['排名'].astype(str) + ". " + df['標的']
+            st.session_state['df_radar'] = df.drop(columns=['Sort_Score', '排名']).head(35)
     
     if 'df_radar' in st.session_state:
         st.dataframe(st.session_state['df_radar'], use_container_width=True)
@@ -209,7 +202,7 @@ with tabs[1]:
             st.table(df2_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
 
 with tabs[2]:
-    sid3 = st.text_input("🔍 代號查詢 (預設上市，上櫃請加.TWO)", value="2330", key="t3_sid")
+    sid3 = st.text_input("🔍 代號查詢", value="2330", key="t3_sid")
     if sid3:
         tid3 = sid3.upper()
         if "." not in tid3: tid3 += ".TW"
@@ -222,8 +215,6 @@ with tabs[2]:
             fig3.add_trace(go.Scatter(x=d3.index, y=d3['D'], name='D', line=dict(color='cyan')), row=2, col=1)
             fig3.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig3, use_container_width=True)
-        else:
-            st.warning("查無數據，請確認代號是否正確。")
 
 with tabs[3]:
     if st.button("啟動波段掃描"):
@@ -235,7 +226,6 @@ with tabs[3]:
             if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
                 brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
         if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
-        else: st.info("目前無符合布林突破之標的。")
 
 with tabs[4]:
     if st.button("啟動量能監控"):
@@ -247,7 +237,6 @@ with tabs[4]:
             if v_now > v_avg * 1.8:
                 vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
         if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
-        else: st.info("目前無符合量能爆發之標的。")
 
 with tabs[5]:
     if st.button("🚀 開始全市場大掃篩選", use_container_width=True):
@@ -262,7 +251,6 @@ with tabs[5]:
             for f in as_completed(f_to_s):
                 if f.result(): results.append(f.result())
         if results: st.dataframe(pd.DataFrame(results).sort_values('今日張數', ascending=False), use_container_width=True)
-        else: st.warning("今日無符合低檔爆量之標的。")
 
 with tabs[6]:
     st.subheader("💎 三大法人昨日買賣超排行榜")
@@ -275,8 +263,6 @@ with tabs[6]:
         with cb:
             st.write("❄️ **法人合賣 Top 20**")
             st.dataframe(chip_df.sort_values('法人合計', ascending=True).head(20).reset_index(drop=True), use_container_width=True)
-    else:
-        st.info("證交所今日數據尚未更新，請於收盤後查詢。")
 
 with tabs[7]:
     col_l, col_r = st.columns([1, 4])
@@ -292,13 +278,11 @@ with tabs[7]:
             if not d8.empty:
                 d8 = calculate_kd(d8)
                 fig8 = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.03)
-                # 主圖：K線與均線
                 fig8.add_trace(go.Candlestick(x=d8.index, open=d8['Open'], high=d8['High'], low=d8['Low'], close=d8['Close'], name='K線'), row=1, col=1)
                 for m in [5, 20, 60]:
                     d8[f'MA{m}'] = d8['Close'].rolling(m).mean()
                     fig8.add_trace(go.Scatter(x=d8.index, y=d8[f'MA{m}'], name=f'MA{m}', line=dict(width=1)), row=1, col=1)
                 
-                # 副指標顯示
                 if ind8 == "KD":
                     fig8.add_trace(go.Scatter(x=d8.index, y=d8['K'], name='K', line=dict(color='yellow')), row=2, col=1)
                     fig8.add_trace(go.Scatter(x=d8.index, y=d8['D'], name='D', line=dict(color='cyan')), row=2, col=1)

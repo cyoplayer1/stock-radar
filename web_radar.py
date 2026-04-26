@@ -13,56 +13,7 @@ st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wi
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# === 2. 核心清洗與計算函數 ===
-def clean_data(df):
-    """徹底修復 yfinance 導致的 TypeError 與 MultiIndex 欄位問題"""
-    if df is None or df.empty: return df
-    df = df.copy()
-    # 如果是多層索引，強制取第一層 (例如把 ('Close', '2330.TW') 變成 'Close')
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    # 針對 Python 3.14 的資料型態進行轉換，確保計算不報錯
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    return df
-
-def calculate_kd(df):
-    df = clean_data(df)
-    if len(df) < 9: return df
-    low_9 = df['Low'].rolling(9).min()
-    high_9 = df['High'].rolling(9).max()
-    rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
-    k, d = 50.0, 50.0
-    k_list, d_list = [], []
-    for val in rsv:
-        if pd.isna(val):
-            k_list.append(k); d_list.append(d)
-        else:
-            k = (2/3)*k + (1/3)*val
-            d = (2/3)*d + (1/3)*k
-            k_list.append(k); d_list.append(d)
-    df['K'], df['D'] = k_list, d_list
-    return df
-
-@st.cache_data(ttl=300)
-def get_market_ranks():
-    ranks = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
-    try:
-        r1 = requests.get("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", headers=HEADERS, timeout=10).json()
-        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
-        df1['金額'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
-        ranks["TWSE"] = df1.sort_values('金額', ascending=False).head(15)[['證券代號','證券名稱','成交金額']]
-        
-        r2 = requests.get("https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json", headers=HEADERS, timeout=10).json()
-        df2 = pd.DataFrame(r2['aaData'])
-        df2['金額'] = pd.to_numeric(df2[9].str.replace(',',''), errors='coerce')
-        ranks["TPEx"] = df2.sort_values('金額', ascending=False).head(15)[[0, 1, 9]]
-        ranks["TPEx"].columns = ['證券代號','證券名稱','成交金額']
-    except: pass
-    return ranks
-
-# === 3. 完整 112 檔名單 ===
+# === 2. 核心名單 (112檔完整垂直排版，防截斷) ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -91,18 +42,42 @@ STOCKS = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦"
 }
 
-# === 4. 網頁介面 ===
-st.title("📡 股神系統整合旗艦版 V5.0")
-tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
+# === 3. 核心清洗與計算函數 ===
+def clean_data(df):
+    """處理 yfinance MultiIndex 問題"""
+    if df is None or df.empty: return df
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    return df
 
-with tabs[0]:
-    if st.button("🚀 啟動完整掃描", use_container_width=True):
-        # 批次下載解決 Rate Limit 問題
-        all_data = yf.download(list(STOCKS.keys()), period="2y", group_by='ticker', silent=True)
-        res = []
-        for t, name in STOCKS.items():
-            try:
-                df = clean_data(all_data[t].dropna())
-                if len(df) < 60: continue
-                close, vol_5d = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
-                if vol_5d < 1000000: continue
+def calculate_kd(df):
+    df = clean_data(df)
+    if len(df) < 9: return df
+    low_9 = df['Low'].rolling(9).min()
+    high_9 = df['High'].rolling(9).max()
+    rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
+    k, d = 50.0, 50.0
+    k_l, d_l = [], []
+    for val in rsv:
+        if pd.isna(val): k_l.append(k); d_l.append(d)
+        else:
+            k = (2/3)*k + (1/3)*val
+            d = (2/3)*d + (1/3)*k
+            k_l.append(k); d_l.append(d)
+    df['K'], df['D'] = k_l, d_l
+    return df
+
+@st.cache_data(ttl=300)
+def get_market_ranks():
+    ranks = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
+    try:
+        r1 = requests.get("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", headers=HEADERS, timeout=10).json()
+        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
+        df1['金額'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
+        ranks["TWSE"] = df1.sort_values('金額', ascending=False).head(15)[['證券代號','證券名稱','成交金額']]
+        
+        r2 = requests.get("

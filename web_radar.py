@@ -68,20 +68,35 @@ def get_rank(m_type):
         if m_type == "TWSE":
             url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(url, headers=HEADERS, verify=False, timeout=10).json()
-            df = pd.DataFrame(res['tables'][8]['data']).iloc[:, [0,1,9]]
+            raw_data = res['tables'][8]['data']
+            df = pd.DataFrame(raw_data)
+            # 上市固定取 0, 1, 9 (代號, 名稱, 成交值)
+            df = df.iloc[:, [0, 1, 9]]
         else:
             url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(url, headers=HEADERS, verify=False, timeout=10).json()
-            # 修正上櫃解析：欄位 0 是代號, 1 是名稱, 8 是成交金額(元)
-            df = pd.DataFrame(res['aaData']).iloc[:, [0,1,8]]
-        df.columns = ['代號','名稱','成交金額(元)']
-        df['值'] = pd.to_numeric(df['成交金額(元)'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
+            raw_data = res.get('aaData', [])
+            if not raw_data: return None
+            df = pd.DataFrame(raw_data)
+            # 上櫃比較亂，我們抓第 0, 1 欄，以及金額通常在第 8 或 9 欄
+            # 這裡強化邏輯：選取前兩欄加上數值最大的那一欄（通常就是成交金額）
+            for col in range(df.shape[1]):
+                df[col] = df[col].astype(str).str.replace(',', '')
+            
+            # 嘗試找尋成交金額欄位 (上櫃通常在索引 8 或 10)
+            df_numeric = df.apply(pd.to_numeric, errors='coerce').fillna(0)
+            val_col = df_numeric.sum().idxmax() # 找出總和最大的欄位
+            df = df.iloc[:, [0, 1, val_col]]
+
+        df.columns = ['代號','名稱','金額Raw']
+        df['值'] = pd.to_numeric(df['金額Raw'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         df = df.sort_values('值', ascending=False).head(15)
         df['成交金額'] = df['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-        return df[['代號','名稱','成交金額']]
-    except: return None
+        return df[['代號','名稱','成交金額']].reset_index(drop=True)
+    except Exception as e:
+        return pd.DataFrame([{"代號": "錯誤", "名稱": str(e), "成交金額": "0"}])
 
-# === 3. 完整名單 ===
+# === 3. 名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -91,23 +106,16 @@ STOCKS = {
     "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
     "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
-    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠","7769.TW": "鴻勁",
+    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
     "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
     "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
     "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光",
     "1519.TW": "華城", "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元",
     "1605.TW": "華新", "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼",
     "2027.TW": "大成鋼", "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰",
-    "9921.TW": "巨大", "9904.TW": "寶成",
-    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航",
-    "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易", "5388.TWO": "中磊",
-    "3380.TW": "明泰", "2345.TW": "智邦",
-    "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金",
-    "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金",
-    "2890.TW": "永豐金", "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金",
-    "8069.TWO": "元太", "3293.TWO": "鈊象", "8436.TW": "大江",
-    "0050.TW": "台灣50", "0056.TW": "高股息", "00878.TW": "國泰永續", "00919.TW": "群益高息",
-    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50","6789.TW": "采鈺","6147.TWO": "頎邦"
+    "2603.TW": "長榮", "2609.TW": "陽明", "2618.TW": "長榮航", "2881.TW": "富邦金",
+    "2882.TW": "國泰金", "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續",
+    "00919.TW": "精選高息", "00929.TW": "科技優息", "8441.TW": "可寧衛", "8390.TWO": "金益鼎"
 }
 
 # === 4. 介面 ===
@@ -135,44 +143,15 @@ with tabs[1]:
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📈 上市成交值")
-        st.table(get_rank("TWSE"))
+        df_twse = get_rank("TWSE")
+        st.table(df_twse)
     with c2:
         st.subheader("📉 上櫃成交值")
-        st.table(get_rank("TPEx"))
+        df_tpex = get_rank("TPEx")
+        if df_tpex is not None:
+            st.table(df_tpex)
+        else:
+            st.error("暫時抓不到上櫃資料，請稍後再試")
 
 with tabs[2]:
-    sid = st.text_input("🔍 輸入代號", "2330")
-    if sid:
-        tid = sid + ".TW" if "." not in sid else sid
-        d = yf.Ticker(tid).history(period="1y")
-        if not d.empty:
-            d = calculate_kd(d)
-            for w in [5, 20]: d[f'{w}MA'] = d['Close'].rolling(w).mean()
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['20MA'], name='月線', line=dict(color='orange')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-
-with tabs[3]:
-    if st.button("啟動布林掃描"):
-        brks = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="6mo")
-            if len(df) < 20: continue
-            df['MA'] = df['Close'].rolling(20).mean(); std = df['Close'].rolling(20).std()
-            if df['Close'].iloc[-1] > (df['MA'].iloc[-1] + 2*std):
-                brks.append({'標認':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
-        if brks: st.dataframe(pd.DataFrame(brks))
-
-with tabs[4]:
-    if st.button("啟動量能監控"):
-        vls = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="1mo")
-            if len(df) < 6: continue
-            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-            if v_now > v_avg * 2: vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
-        if vls: st.dataframe(pd.DataFrame(vls))
+    sid = st.text_input("🔍 輸入代號 (如 2330)",

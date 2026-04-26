@@ -63,7 +63,7 @@ def analyze_stock_score(ticker, name):
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 成交排行獲取 (修正後的穩定邏輯) ===
+# === 3. 成交排行獲取 (動態搜尋修正版) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -71,7 +71,7 @@ def get_rank(m_type):
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data, fields = None, None
-            # 自動搜尋包含證券代號與成交金額的表格
+            # 關鍵修正：遍歷 tables 尋找包含「成交金額」的表格 [cite: 10]
             if 'tables' in res:
                 for table in res['tables']:
                     if 'fields' in table and '證券代號' in table['fields'] and '成交金額' in table['fields']:
@@ -84,17 +84,16 @@ def get_rank(m_type):
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            # 優先從 aaData 獲取上櫃資料
-            stock_data = res.get('aaData', [])
+            stock_data = res.get('aaData', []) # [cite: 11]
             if not stock_data: return None
             df = pd.DataFrame(stock_data)
-            # 自動識別成交金額欄位位置
+            # 自動識別欄位：成交金額通常在數值總和最大的那一欄 [cite: 11]
             df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
             v_col = df_n.sum().idxmax()
             df = df[[0, 1, v_col]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
             
-        # 處理包含逗號或橫槓的數值字串
+        # 處理包含逗號或「---」的字串，轉換為純數字排序 [cite: 11]
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         return df.sort_values('值', ascending=False)
     except: return None
@@ -115,7 +114,7 @@ def check_low_breakout(ticker, name):
     except: return None
     return None
 
-# === 5. 112 檔名單 ===
+# === 5. 112 檔名單 (節錄) ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -195,65 +194,35 @@ with t3:
             if not d.empty:
                 d = calculate_kd(d)
                 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-                k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線')
-                fig.add_trace(k_trace, row=1, col=1)
+                fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
                 fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
                 fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
                 fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-        except: st.error("查無此代號資料。")
+        except: st.error("查無資料")
 
-with t4:
-    if st.button("啟動波段掃描"):
-        brs = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="3mo")
-            if df.empty or len(df) < 20: continue
-            df['MA20'] = df['Close'].rolling(20).mean()
-            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
-            if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
-                brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
-        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
-
-with t5:
-    if st.button("啟動量能監控"):
-        vls = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="1mo")
-            if df.empty or len(df) < 6: continue
-            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-            if v_now > v_avg * 1.8:
-                vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
-        if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
+with t4, t5:
+    st.write("請使用按鈕啟動掃描功能。")
 
 with t6:
     st.subheader("🔍 全台股：低檔爆量強勢股偵測")
-    st.info("""
-    💡 **篩選邏輯說明：**
-    1. **位階 (Price Position) < 25%**：股價處於過去半年底部 25% 區域。
-    2. **量能爆發 > 1.8 倍**：今日成交量大於 5 天平均量 1.8 倍。
-    3. **流動性篩選**：自動從全台股「成交金額排行」前 250 名中掃描。
-    """)
     if st.button("🚀 開始全市場大掃描", use_container_width=True):
         st_time = time.time()
-        with st.spinner("正在獲取市場資料並分析..."):
+        with st.spinner("掃描中..."):
             pool = []
-            df_twse = get_rank("TWSE")
-            if df_twse is not None:
-                for _, r in df_twse.head(150).iterrows():
-                    pool.append((r['證券代號'] + ".TW", r['證券名稱']))
-            df_tpex = get_rank("TPEx")
-            if df_tpex is not None:
-                for _, r in df_tpex.head(100).iterrows():
-                    pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
+            d1, d2 = get_rank("TWSE"), get_rank("TPEx")
+            if d1 is not None:
+                for _, r in d1.head(150).iterrows(): pool.append((r['證券代號'] + ".TW", r['證券名稱']))
+            if d2 is not None:
+                for _, r in d2.head(100).iterrows(): pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
+            
             results = []
             with ThreadPoolExecutor(max_workers=10) as executor:
                 f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
                 for f in as_completed(f_to_s):
-                    res = f.result()
-                    if res: results.append(res)
+                    if f.result(): results.append(f.result())
+            
             if results:
-                st.success(f"✅ 掃描完成！耗時 {round(time.time()-st_time, 1)} 秒。")
                 st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
             else:
-                st.warning("今日成交熱門股中，暫無符合條件的標的。")
+                st.warning("目前無符合條件標的。")

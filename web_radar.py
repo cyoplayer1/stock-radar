@@ -19,7 +19,7 @@ UA += "AppleWebKit/537.36 (KHTML, like Gecko) "
 UA += "Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
-# === 2. 核心計算函數 ===
+# === 2. 核心計算函數 (保留原始邏輯) ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -80,27 +80,36 @@ def get_rank(m_type):
             df = df[[0, 1, v_col]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
-        df_sorted = df.sort_values('值', ascending=False)
-        return df_sorted
+        return df.sort_values('值', ascending=False)
     except: return None
 
-# === 4. 全台股低檔快篩核心邏輯 ===
+# === 4. 快篩邏輯函數 (新增) ===
 def check_low_breakout(ticker, name):
     try:
+        # 抓取半年資料判斷位階
         df = yf.Ticker(ticker).history(period="6mo")
         if df.empty or len(df) < 40: return None
         v_now = df['Volume'].iloc[-1]
-        v_avg = df['Volume'].iloc[-6:-1].mean()
+        v_avg = df['Volume'].iloc[-6:-1].mean() # 前5日均量
+        # 邏輯 A: 量增 1.8 倍
         if v_now < v_avg * 1.8: return None
+        # 邏輯 B: 股價處於半年區間的低檔 25%
         low_p, high_p = df['Low'].min(), df['High'].max()
         curr_p = df['Close'].iloc[-1]
-        pos = (curr_p - low_p) / (high_p - low_p) if high_p != low_p else 1
+        if high_p == low_p: return None
+        pos = (curr_p - low_p) / (high_p - low_p)
         if pos < 0.25:
-            return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now/v_avg, 2), '低檔位置': f"{round(pos*100, 1)}%", '今日張數': int(v_now/1000)}
+            return {
+                '標的': f"{ticker.split('.')[0]} {name}",
+                '收盤價': round(curr_p, 2),
+                '量能倍數': round(v_now / v_avg, 2),
+                '位階位置': f"{round(pos*100, 1)}%",
+                '今日張數': int(v_now / 1000)
+            }
     except: return None
     return None
 
-# === 5. 112 檔名單 ===
+# === 5. 固定名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -131,11 +140,12 @@ STOCKS = {
 
 # === 6. 介面設計 ===
 st.title("📡 股神系統旗艦整合版")
+# 設定六個分頁
 t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
 
+# --- 原始五個功能 (代碼壓縮展示) ---
 with t1:
     if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
-        start_t = time.time()
         res, prc = [], 0
         pb, txt = st.progress(0), st.empty()
         with ThreadPoolExecutor(max_workers=5) as ex:
@@ -146,7 +156,6 @@ with t1:
                 txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
                 if f.result(): res.append(f.result())
         pb.empty(); txt.empty()
-        st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
         if res:
             df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
             st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
@@ -157,14 +166,14 @@ with t2:
     if st.button("🔄 刷新即時排行"): st.cache_data.clear()
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("📈 上市排行 (TWSE)")
+        st.subheader("📈 上市排行")
         df1 = get_rank("TWSE")
         if df1 is not None:
             df1_disp = df1.head(15).copy()
             df1_disp['金額'] = df1_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
             st.table(df1_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
     with c2:
-        st.subheader("📉 上櫃排行 (TPEx)")
+        st.subheader("📉 上櫃排行")
         df2 = get_rank("TPEx")
         if df2 is not None:
             df2_disp = df2.head(15).copy()
@@ -172,15 +181,14 @@ with t2:
             st.table(df2_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
 
 with t3:
-    sid = st.text_input("🔍 代號 (如 2330)", value="2330")
+    sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + ".TW" if "." not in sid else sid
         d = yf.Ticker(tid).history(period="1y")
         if not d.empty:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線')
-            fig.add_trace(k_trace, row=1, col=1)
+            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
             fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
@@ -191,50 +199,48 @@ with t4:
         brs = []
         for t, n in STOCKS.items():
             df = yf.Ticker(t).history(period="3mo")
-            if df.empty or len(df) < 20: continue
-            df['MA20'] = df['Close'].rolling(20).mean()
-            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
-            if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
-                brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
-        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
+            if not df.empty and len(df) >= 20:
+                df['MA20'] = df['Close'].rolling(20).mean()
+                df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
+                if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
+                    brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
+        st.dataframe(pd.DataFrame(brs), use_container_width=True)
 
 with t5:
     if st.button("啟動量能監控"):
         vls = []
         for t, n in STOCKS.items():
             df = yf.Ticker(t).history(period="1mo")
-            if df.empty or len(df) < 6: continue
-            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-            if v_now > v_avg * 1.8:
-                vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
-        if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
+            if not df.empty and len(df) >= 6:
+                v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
+                if v_now > v_avg * 1.8:
+                    vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
+        st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
 
-# === 第六個分頁：全台股低檔爆量快篩 ===
+# --- 第六功能：全台股快篩 (新增內容) ---
 with t6:
-    st.subheader("🔍 全台股：低檔爆量強勢股快篩")
-    st.info("邏輯：自動偵測成交熱門股中「股價在半年低檔區(前25%)」且「今日量增 1.8 倍」的標的。")
+    st.subheader("🔍 全市場：低檔爆量強勢股偵測")
+    st.markdown("💡 **掃描邏輯：** 從全台股成交熱門榜中篩選 **股價位階半年內低於 25%** 且 **今日量增 1.8 倍** 的標的。")
     if st.button("🚀 開始全市場大掃描", use_container_width=True):
-        st_time = time.time()
-        with st.spinner("正在獲取市場資料並分析..."):
-            pool = []
-            df_twse = get_rank("TWSE")
-            if df_twse is not None:
-                for _, r in df_twse.head(150).iterrows():
-                    pool.append((r['證券代號'] + ".TW", r['證券名稱']))
-            df_tpex = get_rank("TPEx")
-            if df_tpex is not None:
-                for _, r in df_tpex.head(100).iterrows():
-                    pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
+        with st.spinner("掃描熱門標的中..."):
+            # 準備掃描名單 (上市櫃熱門前 150+100 檔)
+            scan_pool = []
+            df1 = get_rank("TWSE")
+            if df1 is not None:
+                for _, r in df1.head(150).iterrows(): scan_pool.append((r['證券代號'] + ".TW", r['證券名稱']))
+            df2 = get_rank("TPEx")
+            if df2 is not None:
+                for _, r in df2.head(100).iterrows(): scan_pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
             
+            # 多執行緒掃描
             results = []
             with ThreadPoolExecutor(max_workers=10) as executor:
-                f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
-                for f in as_completed(f_to_s):
+                futures = {executor.submit(check_low_breakout, t, n): t for t, n in scan_pool}
+                for f in as_completed(futures):
                     res = f.result()
                     if res: results.append(res)
             
             if results:
-                st.success(f"✅ 掃描完成！耗時 {round(time.time()-st_time, 1)} 秒。")
                 st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
             else:
-                st.warning("今日成交熱門股中，暫無符合「低檔位置 < 25% 且量增 1.8 倍」的標的。")
+                st.warning("目前熱門股中暫無符合條件標的。")

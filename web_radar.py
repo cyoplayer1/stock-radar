@@ -13,9 +13,9 @@ st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wi
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# === 2. 核心清洗與計算函數 ===
+# === 2. 核心清洗與計算函數 (解決 TypeError 關鍵) ===
 def clean_it(df):
-    """處理 yfinance MultiIndex 與數值型態問題"""
+    """處理 yfinance 欄位與數值問題"""
     if df is None or df.empty: return df
     df = df.copy()
     if isinstance(df.columns, pd.MultiIndex):
@@ -42,26 +42,24 @@ def calculate_kd(df):
 
 @st.cache_data(ttl=300)
 def get_rk():
-    """獲取排行，使用位置索引避免 KeyError"""
+    """獲取排行，使用索引位置避免 KeyError"""
     res = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
     try:
         # 上市
         u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
         r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
         d1 = pd.DataFrame(r1['tables'][8]['data'])
-        # 欄位自動命名以防 API 變動
-        d1 = d1.iloc[:, [0, 1, 4]]
-        d1.columns = ['代號', '名稱', '成交金額']
-        d1['v'] = pd.to_numeric(d1['成交金額'].str.replace(',',''), errors='coerce')
+        d1 = d1.iloc[:, [0, 1, 4]] # 代號, 名稱, 成交金額
+        d1.columns = ['代號', '名稱', '金額']
+        d1['v'] = pd.to_numeric(d1['金額'].str.replace(',',''), errors='coerce')
         res["TWSE"] = d1.sort_values('v', ascending=False).head(15).drop(columns='v')
-        
         # 上櫃
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
         d2 = pd.DataFrame(r2['aaData'])
         d2 = d2.iloc[:, [0, 1, 9]]
-        d2.columns = ['代號', '名稱', '成交金額']
-        d2['v'] = pd.to_numeric(d2['成交金額'].str.replace(',',''), errors='coerce')
+        d2.columns = ['代號', '名稱', '金額']
+        d2['v'] = pd.to_numeric(d2['金額'].str.replace(',',''), errors='coerce')
         res["TPEx"] = d2.sort_values('v', ascending=False).head(15).drop(columns='v')
     except: pass
     return res
@@ -96,8 +94,8 @@ SL = {
 }
 
 # === 4. 網頁介面 ===
-st.title("📡 股神系統整合旗艦版 V11.0")
-tbs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
+st.title("📡 股神系統旗艦整合版 V12.0")
+tbs = st.tabs(["🎯 雷達評分", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
 
 with tbs[0]:
     if st.button("🚀 啟動掃描", use_container_width=True):
@@ -121,20 +119,44 @@ with tbs[0]:
         if rl: st.dataframe(pd.DataFrame(rl).sort_values('Sort', ascending=False).drop(columns='Sort'), use_container_width=True)
 
 with tbs[1]:
-    rk_data = get_rk()
+    rk_d = get_rk()
     c1, c2 = st.columns(2)
-    with c1: st.subheader("📈 上市排行"); st.table(rk_data["TWSE"])
-    with c2: st.subheader("📉 上櫃排行"); st.table(rk_data["TPEx"])
+    with c1: st.subheader("📈 上市排行"); st.table(rk_d["TWSE"])
+    with c2: st.subheader("📉 上櫃排行"); st.table(rk_d["TPEx"])
 
 with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        d_raw = yf.download(tid, period="1y", silent=True)
-        d = clean_it(d_raw)
+        d = clean_it(yf.download(tid, period="1y", silent=True))
         if not d.empty:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color
+            # 拆分短行防止截斷
+            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], 
+                high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', 
+                line=dict(color='yellow')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', 
+                line=dict(color='cyan')), row=2, col=1)
+            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+with tbs[5]:
+    st.subheader("🔍 全台股：低檔爆量偵測")
+    if st.button("🚀 開始市場大掃描"):
+        with st.spinner("掃描前 250 名熱門股..."):
+            rk_m = get_rk()
+            cands = [str(x) + ".TW" for x in rk_m["TWSE"]['代號']] + [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
+            raw_m = yf.download(cands, period="6mo", group_by='ticker', silent=True)
+            res_l = []
+            for tc in cands:
+                try:
+                    dfm = clean_it(raw_m[tc])
+                    vn, va = dfm['Volume'].iloc[-1], dfm['Volume'].iloc[-6:-1].mean()
+                    lp, hp, cp = dfm['Low'].min(), dfm['High'].max(), dfm['Close'].iloc[-1]
+                    pos = (cp - lp) / (hp - lp) if hp != lp else 1
+                    if vn > va * 1.8 and pos < 0.25:
+                        res_l.append({'代號':tc, '價':round(float(cp),2), '倍數':round(float(vn/va),2), '位置':f"{round(float(pos*100),1)}%"})
+                except: continue
+            if res_l: st.dataframe(pd.DataFrame(res_l).sort_values('倍數', ascending=False), use_container_width=True)

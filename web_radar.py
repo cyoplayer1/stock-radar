@@ -87,7 +87,7 @@ def analyze_stock_score(ticker, stock_name):
         clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
         return {
             '標的名稱': f"{clean_ticker} {stock_name}",
-            '評分': f"{score}分",
+            '評分': score, # 改為純數字方便排序與上色
             '收盤價': round(close_price, 2),
             '技術面狀態': " + ".join(status_tags) if status_tags else "空頭休息",
             '日K': round(d_k, 1),
@@ -132,7 +132,9 @@ STOCKS = {
     "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50","6789.TW": "采鈺","6147.TWO": "頎邦"
 }
 
-# ================= 股市排行系統 函數 =================
+# ================= 股市排行系統 函數 (加入快取機制) =================
+# 設定快取保留 300 秒 (5分鐘)，避免頻繁重抓被證交所封鎖
+@st.cache_data(ttl=300)
 def get_twse_top_15():
     """獲取上市（TWSE）成交值前 15 大股票"""
     url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
@@ -174,6 +176,7 @@ def get_twse_top_15():
     except Exception as e:
         return None, f"上市錯誤: {e}"
 
+@st.cache_data(ttl=300)
 def get_tpex_top_15():
     """獲取上櫃（TPEx）成交值前 15 大股票"""
     url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
@@ -205,6 +208,15 @@ def get_tpex_top_15():
     except Exception as e:
         return None, f"上櫃錯誤: {e}"
 
+# ================= 視覺化上色函數 =================
+def style_stock_dataframe(val):
+    """台股習慣：紅色代表強勢/上漲，綠色代表弱勢/下跌"""
+    if isinstance(val, str):
+        if '金叉' in val or '多' in val or '站上' in val:
+            return 'color: #ff4b4b; font-weight: bold;' # Streamlit 紅色
+        elif '空' in val or '休息' in val:
+            return 'color: #00fa9a;' # Streamlit 綠色
+    return ''
 
 # ================= 網頁主畫面配置 =================
 st.title("📡 綜合投資分析站")
@@ -248,24 +260,29 @@ with tab1:
         
         if scored_stocks:
             df_result = pd.DataFrame(scored_stocks)
-            df_result['Sort_Score'] = df_result['評分'].str.replace('分', '').astype(int)
-            df_result = df_result.sort_values(by=['Sort_Score', '日K'], ascending=[False, False])
-            df_result = df_result.drop(columns=['Sort_Score'])
+            # 排序：優先看分數，同分看日K值
+            df_result = df_result.sort_values(by=['評分', '日K'], ascending=[False, False])
             
+            # 將評分加上 "分" 字，並取前 30 名
+            df_result['評分'] = df_result['評分'].astype(str) + "分"
             df_result = df_result.head(30)
             df_result.index = range(1, len(df_result) + 1)
             
             st.subheader("🔥 目前大盤最強的 30 檔標的")
-            st.dataframe(df_result, use_container_width=True)
+            
+            # 套用專業紅綠配色
+            styled_df = df_result.style.applymap(style_stock_dataframe, subset=['技術面狀態'])
+            st.dataframe(styled_df, use_container_width=True)
         else:
             st.error("連資料都抓不到，可能是網路連線問題。")
 
 # ----------------- 第二頁：股市排行 -----------------
 with tab2:
     st.markdown("### 台股前 15 大成交值排行榜")
+    st.markdown("*(資料每 5 分鐘自動快取更新，保護伺服器不被封鎖)*")
     st.markdown("---")
     
-    if st.button('🔄 重新抓取排行數據'):
+    if st.button('🔄 強制重新抓取排行數據'):
         st.cache_data.clear()
 
     col1, col2 = st.columns(2)

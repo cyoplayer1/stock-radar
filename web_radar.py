@@ -4,7 +4,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests, warnings, time, urllib3
-from concurrent.futures import ThreadPoolExecutor
 
 # === 1. 系統設定 ===
 warnings.filterwarnings("ignore")
@@ -20,14 +19,13 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # === 2. 數據清洗與計算 (關鍵解決 TypeError) ===
 def clean_it(df):
-    """徹底處理 MultiIndex 問題"""
+    """處理 MultiIndex 並強制轉為純數值型態"""
     if df is None or df.empty: return None
     df = df.copy()
-    # 處理多層索引
     if hasattr(df.columns, 'nlevels') and \
        df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
-    # 強制轉為數值型態
+    # 強制轉型避開 Object 錯誤
     for c in ['Open','High','Low','Close','Volume']:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], 
@@ -78,7 +76,7 @@ def get_rk():
     except: pass
     return res
 
-# === 3. 核心 112 檔名單 (極短行防截斷) ===
+# === 3. 核心名單 (防截斷排版) ===
 SL = {
     "2330.TW": "台積電", "2317.TW": "鴻海", 
     "2454.TW": "聯發科", "2308.TW": "台達電",
@@ -132,7 +130,7 @@ SL = {
 }
 
 # === 4. 介面設計 ===
-st.title("📡 股神旗艦整合 V20.0")
+st.title("📡 股神旗艦整合 V21.0")
 tbs = st.tabs(["🎯 股神雷達", "💰 成交排行", 
                "📈 互動看盤", "🚀 波段掃描", 
                "🔥 量能監控", "🔍 市場快篩"])
@@ -140,33 +138,25 @@ tbs = st.tabs(["🎯 股神雷達", "💰 成交排行",
 with tbs[0]:
     if st.button("🚀 啟動掃描", use_container_width=True):
         # 解決 TypeError 的關鍵下載法
-        data = yf.download(list(SL.keys()), period="2y", silent=True)
+        data = yf.download(list(SL.keys()), period="2y", 
+                           multi_level_index=False, silent=True)
         rl = []
         for t, name in SL.items():
             try:
-                # 針對 MultiIndex 進行安全數據提取
-                if hasattr(data.columns, 'nlevels') and \
-                   data.columns.nlevels > 1:
-                    temp_df = data.xs(t, axis=1, level=1)
-                else: temp_df = data[t]
-                
-                df = clean_it(temp_df)
+                # 確保在 Python 3.14 下提取正確
+                df = clean_it(data[t]) if t in data.columns else None
                 if df is None or len(df) < 60: continue
-                
                 cl = df['Close'].iloc[-1]
                 v5 = df['Volume'].tail(5).mean()
                 if v5 < 1000000: continue
-                
                 sc, tags = 0, []
                 ma20 = df['Close'].rolling(20).mean().iloc[-1]
                 if cl > ma20: sc += 20; tags.append("[站上月線]")
-                
                 dkd = calculate_kd(df)
                 if dkd['K'].iloc[-1] > dkd['D'].iloc[-1]:
                     if dkd['K'].iloc[-2] <= dkd['D'].iloc[-2]: 
                         sc += 40; tags.append("[日金叉]")
                     else: sc += 20; tags.append("[日偏多]")
-                
                 rl.append({'標的': f"{t.split('.')[0]} {name}", 
                            '評分': f"{sc}分", 
                            '收盤': round(float(cl), 2), 
@@ -191,13 +181,11 @@ with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 單檔抓取使用 history 最穩定
         d = clean_it(yf.Ticker(tid).history(period="1y"))
         if d is not None:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                                 row_heights=[0.7, 0.3])
-            # 短行排版防截斷
             fig.add_trace(go.Candlestick(x=d.index, 
                 open=d['Open'], high=d['High'], 
                 low=d['Low'], close=d['Close'], name='K線'), 
@@ -212,7 +200,7 @@ with tbs[2]:
 
 with tbs[5]:
     st.subheader("🔍 全台股：低檔爆量偵測")
-    if st.button("🚀 開始大掃描"):
+    if st.button("🚀 開始全市場大掃描"):
         with st.spinner("掃描熱門標的..."):
             rk_m = get_rk()
             cands = []
@@ -222,15 +210,12 @@ with tbs[5]:
                 cands += [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
             
             if cands:
-                raw_m = yf.download(cands, period="6mo", silent=True)
+                raw_m = yf.download(cands, period="6mo", 
+                                   multi_level_index=False, silent=True)
                 res_l = []
                 for tc in cands:
                     try:
-                        if hasattr(raw_m.columns, 'nlevels') and \
-                           raw_m.columns.nlevels > 1:
-                            temp_m = raw_m.xs(tc, axis=1, level=1)
-                        else: temp_m = raw_m[tc]
-                        dfm = clean_it(temp_m)
+                        dfm = clean_it(raw_m[tc]) if tc in raw_m.columns else None
                         if dfm is None: continue
                         vn, va = dfm['Volume'].iloc[-1], \
                                  dfm['Volume'].iloc[-6:-1].mean()

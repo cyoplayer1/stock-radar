@@ -43,10 +43,15 @@ STOCKS = {
 }
 
 # === 3. 核心函數 ===
+def fix_df_columns(df):
+    """處理 yfinance MultiIndex 欄位問題"""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
+
 def calculate_kd(df):
     if len(df) < 9: return df
-    df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+    df = fix_df_columns(df.copy())
     low_9 = df['Low'].rolling(9).min()
     high_9 = df['High'].rolling(9).max()
     rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
@@ -56,16 +61,10 @@ def calculate_kd(df):
         if pd.isna(val): k_list.append(50.0); d_list.append(50.0)
         else:
             k = (2/3)*k + (1/3)*val
-            d = (2/3)*d + (1/3) * k
+            d = (2/3)*d + (1/3)*k
             k_list.append(k); d_list.append(d)
     df['K'], df['D'] = k_list, d_list
     return df
-
-@st.cache_data(ttl=3600)
-def get_batch_data(tickers):
-    # 下載後移除 MultiIndex 層級，避免 TypeError
-    data = yf.download(list(tickers), period="2y", group_by='ticker', silent=True)
-    return data
 
 @st.cache_data(ttl=300)
 def get_market_ranks():
@@ -90,11 +89,12 @@ tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "
 
 with tabs[0]:
     if st.button("🚀 啟動完整掃描", use_container_width=True):
-        all_data = get_batch_data(STOCKS.keys())
+        tickers = list(STOCKS.keys())
+        all_data = yf.download(tickers, period="2y", group_by='ticker', silent=True)
         res = []
         for t, name in STOCKS.items():
             try:
-                df = all_data[t].dropna()
+                df = fix_df_columns(all_data[t].dropna())
                 if len(df) < 60: continue
                 close, vol_5d = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
                 if vol_5d < 1000000: continue
@@ -120,11 +120,12 @@ with tabs[1]:
     with c2: st.subheader("📉 上櫃排行"); st.table(ranks["TPEx"])
 
 with tabs[2]:
-    sid = st.text_input("🔍 代號", value="2330")
+    sid = st.text_input("🔍 代號 (如 2330)", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
         d = yf.download(tid, period="1y", silent=True)
         if not d.empty:
+            d = fix_df_columns(d)
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
             fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
@@ -141,7 +142,7 @@ with tabs[5]:
         results = []
         for t in cands:
             try:
-                df = all_m[t].dropna()
+                df = fix_df_columns(all_m[t].dropna())
                 v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
                 low_p, high_p, curr_p = df['Low'].min(), df['High'].max(), df['Close'].iloc[-1]
                 pos = (curr_p - low_p) / (high_p - low_p)

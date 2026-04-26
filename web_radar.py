@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 
-# === 1. 系統設定 ===
+# === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
@@ -17,101 +17,7 @@ st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wi
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
-# === 2. 核心快篩邏輯 ===
-def check_low_breakout(ticker, name):
-    try:
-        # 抓取 6 個月資料來判斷高低位
-        df = yf.Ticker(ticker).history(period="6mo")
-        if df.empty or len(df) < 40: return None
-        
-        # 1. 量能條件：今日量 > 5日均量 1.8 倍
-        v_now = df['Volume'].iloc[-1]
-        v_avg = df['Volume'].iloc[-6:-1].mean()
-        if v_now < v_avg * 1.8: return None
-        
-        # 2. 低檔條件：股價在半年高低區間的 25% 以下
-        low_p = df['Low'].min()
-        high_p = df['High'].max()
-        curr_p = df['Close'].iloc[-1]
-        price_range = high_p - low_p
-        if price_range == 0: return None
-        pos = (curr_p - low_p) / price_range
-        
-        if pos < 0.25: # 符合低檔爆量
-            return {
-                '代號名稱': f"{ticker.split('.')[0]} {name}",
-                '收盤價': round(curr_p, 2),
-                '量能倍數': round(v_now / v_avg, 2),
-                '低檔位置': f"{round(pos * 100, 1)}%",
-                '今日張數': int(v_now / 1000)
-            }
-    except: return None
-    return None
-
-@st.cache_data(ttl=300)
-def get_all_market_candidates():
-    """從交易所 API 抓取當天成交量大的前 200 名作為篩選池"""
-    candidates = []
-    try:
-        # 上市
-        u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-        r1 = requests.get(u1, headers=HEADERS, verify=False, timeout=10).json()
-        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
-        df1['val'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
-        # 取成交金額前 150 名
-        for _, row in df1.sort_values('val', ascending=False).head(150).iterrows():
-            candidates.append((row['證券代號'] + ".TW", row['證券名稱']))
-            
-        # 上櫃
-        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-        r2 = requests.get(u2, headers=HEADERS, verify=False, timeout=10).json()
-        df2 = pd.DataFrame(r2['aaData'])
-        df2['val'] = pd.to_numeric(df2[9].str.replace(',',''), errors='coerce')
-        # 取成交金額前 100 名
-        for _, row in df2.sort_values('val', ascending=False).head(100).iterrows():
-            candidates.append((row[0] + ".TWO", row[1]))
-    except: pass
-    return candidates
-
-# === 3. 介面設定 (Tab 6) ===
-st.title("📡 股神系統整合旗艦版")
-tabs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
-
-# ... 前面 1-5 個分頁保持原本邏輯 ...
-
-with tabs[5]:
-    st.subheader("🔍 全台股：低檔爆量強勢股搜尋")
-    st.info("邏輯：從全台股成交金額前 250 名中，自動偵測「量能翻倍」且「價格在半年低點」的標的。")
-    
-    if st.button("🚀 開始全市場掃描", use_container_width=True):
-        start_t = time.time()
-        with st.spinner("正在獲取市場資料並進行多線程分析..."):
-            pool = get_all_market_candidates()
-            results = []
-            
-            # 使用多線程加速抓取 yfinance 資料
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_stock = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
-                for future in as_completed(future_to_stock):
-                    res = future.result()
-                    if res: results.append(res)
-            
-            if results:
-                st.success(f"掃描完成！耗時 {round(time.time()-start_t, 1)} 秒")
-                st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
-            else:
-                st.warning("今日全台股成交前 250 名中，暫無符合低檔爆量（位置 < 25% 且量增 1.8 倍）的標的。")
-# === 1. 系統環境設定 ===
-warnings.filterwarnings("ignore")
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
-
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-UA += "AppleWebKit/537.36 (KHTML, like Gecko) "
-UA += "Chrome/120.0.0.0 Safari/537.36"
-HEADERS = {"User-Agent": UA}
-
-# === 2. 核心計算函數 (保留原始邏輯) ===
+# === 2. 核心計算與快篩邏輯 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -130,13 +36,14 @@ def calculate_kd(df):
     return df
 
 def analyze_stock_score(ticker, name):
+    """雷達評分邏輯 (112檔專用)"""
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period="2y")
         if df.empty or len(df) < 60: return None
         close = df['Close'].iloc[-1]
         vol_5d = df['Volume'].tail(5).mean()
-        if vol_5d < 1000000: return None # 1000張門檻
+        if vol_5d < 1000000: return None 
         score, tags = 0, []
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
         if close > ma20: score += 20; tags.append("[站上月線]")
@@ -153,15 +60,50 @@ def analyze_stock_score(ticker, name):
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 成交排行 (修復上櫃跑不出來) ===
+def check_low_breakout(ticker, name):
+    """全台股低檔快篩邏輯"""
+    try:
+        df = yf.Ticker(ticker).history(period="6mo")
+        if df.empty or len(df) < 40: return None
+        v_now = df['Volume'].iloc[-1]
+        v_avg = df['Volume'].iloc[-6:-1].mean()
+        if v_now < v_avg * 1.8: return None
+        low_p, high_p = df['Low'].min(), df['High'].max()
+        curr_p = df['Close'].iloc[-1]
+        price_range = high_p - low_p
+        if price_range == 0: return None
+        pos = (curr_p - low_p) / price_range
+        if pos < 0.25:
+            return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now / v_avg, 2), '低檔位置': f"{round(pos * 100, 1)}%", '今日張數': int(v_now / 1000)}
+    except: return None
+    return None
+
+@st.cache_data(ttl=300)
+def get_all_market_candidates():
+    candidates = []
+    try:
+        u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
+        r1 = requests.get(u1, headers=HEADERS, verify=False, timeout=10).json()
+        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
+        df1['val'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
+        for _, row in df1.sort_values('val', ascending=False).head(150).iterrows():
+            candidates.append((row['證券代號'] + ".TW", row['證券名稱']))
+        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
+        r2 = requests.get(u2, headers=HEADERS, verify=False, timeout=10).json()
+        df2 = pd.DataFrame(r2['aaData'])
+        df2['val'] = pd.to_numeric(df2[9].str.replace(',',''), errors='coerce')
+        for _, row in df2.sort_values('val', ascending=False).head(100).iterrows():
+            candidates.append((row[0] + ".TWO", row[1]))
+    except: pass
+    return candidates
+
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
         if m_type == "TWSE":
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            df = pd.DataFrame(res['tables'][8]['data'])
-            df.columns = res['tables'][8]['fields']
+            df = pd.DataFrame(res['tables'][8]['data'], columns=res['tables'][8]['fields'])
             df = df[['證券代號', '證券名稱', '成交金額']]
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
@@ -177,7 +119,7 @@ def get_rank(m_type):
         return df[['證券代號','證券名稱','金額']].reset_index(drop=True)
     except: return None
 
-# === 4. 完整 112 檔名單 (垂直定義防截斷) ===
+# === 3. 完整 112 檔名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -201,82 +143,4 @@ STOCKS = {
     "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
     "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
     "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
-    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
-    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
-    "6789.TW": "采鈺", "6147.TWO": "頎邦"
-}
-
-# === 5. 介面設計 ===
-st.title("📡 股神系統旗艦整合版")
-t1, t2, t3, t4, t5 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控"])
-
-with t1:
-    if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
-        start_t = time.time()
-        res, prc = [], 0
-        pb, txt = st.progress(0), st.empty()
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
-            for f in as_completed(futs):
-                prc += 1
-                pb.progress(prc / len(STOCKS))
-                txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
-                if f.result(): res.append(f.result())
-        pb.empty(); txt.empty()
-        st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
-        if res:
-            df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
-            st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
-    if 'df_radar' in st.session_state:
-        st.dataframe(st.session_state['df_radar'], use_container_width=True)
-
-with t2:
-    if st.button("🔄 刷新即時排行"): st.cache_data.clear()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("📈 上市排行 (TWSE)")
-        df1 = get_rank("TWSE")
-        if df1 is not None: st.table(df1)
-    with c2:
-        st.subheader("📉 上櫃排行 (TPEx)")
-        df2 = get_rank("TPEx")
-        if df2 is not None: st.table(df2)
-
-with t3:
-    sid = st.text_input("🔍 代號 (如 2330)", value="2330")
-    if sid:
-        tid = sid + ".TW" if "." not in sid else sid
-        d = yf.Ticker(tid).history(period="1y")
-        if not d.empty:
-            d = calculate_kd(d)
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], 
-                                     low=d['Low'], close=d['Close'], name='K線')
-            fig.add_trace(k_trace, row=1, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-
-with t4:
-    if st.button("啟動波段掃描"):
-        brs = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="3mo")
-            if df.empty or len(df) < 20: continue
-            df['MA20'] = df['Close'].rolling(20).mean()
-            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
-            if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
-                brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
-        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
-
-with t5:
-    if st.button("啟動量能監控"):
-        vls = []
-        for t, n in STOCKS.items():
-            df = yf.Ticker(t).history(period="1mo")
-            if df.empty or len(df) < 6: continue
-            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-            if v_now > v_avg * 1.8:
-                vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
-        if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
+    "0050.TW":

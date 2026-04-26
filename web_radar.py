@@ -72,21 +72,21 @@ def get_rank(m_type):
         if m_type == "TWSE":
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            # 抓取上市熱門數據表的內容
+            # 抓取上市熱門數據表的內容 [cite: 33]
             df = pd.DataFrame(res['tables'][8]['data'])
-            # 改用 iloc 抓取前二欄與金額欄位（位置4），避開欄位名變動
+            # 改用 iloc 抓取前二欄與金額欄位（位置4），避開欄位名變動 [cite: 43]
             df = df.iloc[:, [0, 1, 4]]
             df.columns = ['代號', '名稱', '金額']
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            # 抓取上櫃數據
+            # 抓取上櫃數據 [cite: 34]
             df = pd.DataFrame(res.get('aaData', []))
-            # 櫃買中心抓取位置 0, 1 與位置 9 (成交金額)
+            # 櫃買中心抓取位置 0, 1 與位置 9 (成交金額) [cite: 44]
             df = df.iloc[:, [0, 1, 9]]
             df.columns = ['代號', '名稱', '金額']
             
-        # 統一處理數值轉換與過濾
+        # 統一處理數值轉換與過濾 [cite: 43]
         df['值'] = pd.to_numeric(df['金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
         return df.sort_values('值', ascending=False)
     except: return None
@@ -161,4 +161,91 @@ with t1:
         st.dataframe(st.session_state['df_radar'], use_container_width=True)
 
 with t2:
-    if st.button("🔄 刷新即時
+    if st.button("🔄 刷新即時排行"): st.cache_data.clear()
+    rk_d = {"TWSE": get_rank("TWSE"), "TPEx": get_rank("TPEx")}
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("📈 上市排行 (TWSE)")
+        if rk_d["TWSE"] is not None:
+            df1_disp = rk_d["TWSE"].head(15).copy()
+            df1_disp['金額'] = df1_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+            st.table(df1_disp[['代號','名稱','金額']].reset_index(drop=True))
+    with c2:
+        st.subheader("📉 上櫃排行 (TPEx)")
+        if rk_d["TPEx"] is not None:
+            df2_disp = rk_d["TPEx"].head(15).copy()
+            df2_disp['金額'] = df2_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+            st.table(df2_disp[['代號','名稱','金額']].reset_index(drop=True))
+
+with t3:
+    sid = st.text_input("🔍 代號 (如 2330)", value="2330")
+    if sid:
+        tid = sid + ".TW" if "." not in sid else sid
+        d = yf.Ticker(tid).history(period="1y")
+        if not d.empty:
+            d = calculate_kd(d)
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+            k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線')
+            fig.add_trace(k_trace, row=1, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+            fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+with t4:
+    if st.button("啟動波段掃描"):
+        brs = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="3mo")
+            if df.empty or len(df) < 20: continue
+            df['MA20'] = df['Close'].rolling(20).mean()
+            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
+            if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
+                brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
+        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
+
+with t5:
+    if st.button("啟動量能監控"):
+        vls = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="1mo")
+            if df.empty or len(df) < 6: continue
+            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
+            if v_now > v_avg * 1.8:
+                vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
+        if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)
+
+# === 第六個分頁：全台股低檔爆量快篩 ===
+with t6:
+    st.subheader("🔍 全台股：低檔爆量強勢股偵測")
+    st.info("""
+    💡 **篩選邏輯說明：**
+    1. **位階 (Price Position) < 25%**：股價處於過去半年（180天）最高與最低區間的底部 25% 區域，確保目前不追高。
+    2. **量能爆發 > 1.8 倍**：今日成交量大於過去 5 天平均成交量的 1.8 倍，代表有主力資金進場敲進。
+    3. **流動性篩選**：系統會自動從全台股每日「成交金額排行」前 250 名中進行掃描，避開沒量的小型股。
+    """)
+    if st.button("🚀 開始全市場大掃描", use_container_width=True):
+        st_time = time.time()
+        with st.spinner("正在獲取市場資料並分析..."):
+            pool = []
+            df_twse = get_rank("TWSE")
+            if df_twse is not None:
+                for _, r in df_twse.head(150).iterrows():
+                    pool.append((str(r.iloc[0]) + ".TW", str(r.iloc[1])))
+            df_tpex = get_rank("TPEx")
+            if df_tpex is not None:
+                for _, r in df_tpex.head(100).iterrows():
+                    pool.append((str(r.iloc[0]) + ".TWO", str(r.iloc[1])))
+            
+            results = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
+                for f in as_completed(f_to_s):
+                    res = f.result()
+                    if res: results.append(res)
+            
+            if results:
+                st.success(f"✅ 掃描完成！耗時 {round(time.time()-st_time, 1)} 秒。")
+                st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
+            else:
+                st.warning("今日成交熱門股中，暫無符合條件的標的。")

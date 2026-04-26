@@ -46,22 +46,18 @@ def analyze_stock_score(ticker, name):
         
         score, tags = 0, []
         ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        if close > ma20: 
-            score += 20; tags.append("[站上月線]")
+        if close > ma20: score += 20; tags.append("[站上月線]")
         
         df = calculate_kd(df.copy())
         dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
         dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
-        if (dk > dd) and (dyk <= dyd): 
-            score += 40; tags.append("[日剛金叉]")
-        elif dk > dd: 
-            score += 20; tags.append("[日線偏多]")
+        if (dk > dd) and (dyk <= dyd): score += 40; tags.append("[日剛金叉]")
+        elif dk > dd: score += 20; tags.append("[日線偏多]")
         
         df_w = df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
         df_w = calculate_kd(df_w.copy())
         wk = df_w['K'].iloc[-1]
-        if wk > df_w['D'].iloc[-1]: 
-            score += 40; tags.append("[周線偏多]")
+        if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
         
         tid = ticker.replace('.TW', '').replace('.TWO', '')
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
@@ -236,12 +232,12 @@ with tabs[5]:
     st.subheader("🔍 全台股：低檔爆量強勢股偵測")
     st.info("""
     💡 **篩選邏輯說明：**
-    1. **位階 (Price Position) < 25%**：股價處於過去半年（180天）最高與最低區間的底部 25% 區域，確保目前不追高。
-    2. **量能爆發 > 1.8 倍**：今日成交量大於過去 5 天平均成交量的 1.8 倍，代表有主力資金進場敲進。
-    3. **流動性篩選**：系統會自動從全台股每日「成交金額排行」前 250 名中進行掃描，避開沒量的小型股。
+    1. **位階 (Price Position) < 25%**：股價處於過去半年底部 25% 區域。
+    2. **量能爆發 > 1.8 倍**：今日成交量大於 5 天平均量 1.8 倍。
+    3. **流動性篩選**：自動從全台股每日「成交金額排行」前 250 名中進行掃描。
     """)
     
-    if st.button("🚀 開始全市場大掃篩選", use_container_width=True):
+    if st.button("🚀 開始全市場大掃描", use_container_width=True):
         pool, results = [], []
         df_twse, df_tpex = get_rank("TWSE"), get_rank("TPEx")
         if df_twse is not None:
@@ -250,24 +246,33 @@ with tabs[5]:
             for _, r in df_tpex.head(100).iterrows(): pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
         
         if pool:
+            pb5, txt5 = st.progress(0), st.empty()
+            prc5 = 0
             with ThreadPoolExecutor(max_workers=10) as executor:
                 f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
                 for f in as_completed(f_to_s):
+                    prc5 += 1
+                    pb5.progress(prc5 / len(pool))
+                    txt5.text(f"🔄 掃描進度: {prc5}/{len(pool)}")
                     if f.result(): results.append(f.result())
+            pb5.empty(); txt5.empty()
             if results: st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
-            else: st.warning("今日暫無符合條件之標的。")
+            else: st.warning("今日暫無符合條件標的。")
 
 with tabs[6]:
     st.subheader("💎 三大法人昨日買賣超排行榜")
-    chip_df = get_chip_data()
-    if chip_df is not None:
-        ca, cb = st.columns(2)
-        with ca:
-            st.write("🔥 **法人合買 Top 20**")
-            st.dataframe(chip_df.sort_values('法人合計', ascending=False).head(20).reset_index(drop=True), use_container_width=True)
-        with cb:
-            st.write("❄️ **法人合賣 Top 20**")
-            st.dataframe(chip_df.sort_values('法人合計', ascending=True).head(20).reset_index(drop=True), use_container_width=True)
+    if st.button("🚀 啟動籌碼大數據分析", use_container_width=True):
+        chip_df = get_chip_data()
+        if chip_df is not None:
+            ca, cb = st.columns(2)
+            with ca:
+                st.write("🔥 **法人合買 Top 20**")
+                st.dataframe(chip_df.sort_values('法人合計', ascending=False).head(20).reset_index(drop=True), use_container_width=True)
+            with cb:
+                st.write("❄️ **法人合賣 Top 20**")
+                st.dataframe(chip_df.sort_values('法人合計', ascending=True).head(20).reset_index(drop=True), use_container_width=True)
+        else:
+            st.error("暫時無法抓取法人數據，請稍後再試。")
 
 with tabs[7]:
     col_l, col_r = st.columns([1, 4])

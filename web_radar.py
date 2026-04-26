@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 import requests, warnings, time, urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# === 1. 系統設定 ===
+# === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神雷達", page_icon="📡", layout="wide")
@@ -15,18 +15,18 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # === 2. 核心清洗與計算 (解決 TypeError 關鍵) ===
 def clean_it(df):
-    """徹底處理資料格式問題，避免 TypeError"""
+    """徹底處理 yfinance 各種格式問題，避免 TypeError"""
     if df is None or df.empty: return df
     df = df.copy()
-    # 移除 MultiIndex (yfinance 常見問題)
+    # 處理 MultiIndex: 針對 Python 3.14 格式強制降維
     if hasattr(df.columns, 'nlevels') and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
-    # 強制轉為純數值型態
+    # 強制轉為純數值型態，並過濾掉不正常的資料
     target_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for c in target_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
-    return df.dropna()
+    return df.dropna(subset=['Close'])
 
 def calculate_kd(df):
     df = clean_it(df)
@@ -36,7 +36,8 @@ def calculate_kd(df):
     rsv = (df['Close'] - l9) / (h9 - l9) * 100
     k, d, kl, dl = 50.0, 50.0, [], []
     for v in rsv:
-        if pd.isna(v): kl.append(k); dl.append(d)
+        if pd.isna(v): 
+            kl.append(k); dl.append(d)
         else:
             k = (2/3)*k + (1/3)*v
             d = (2/3)*d + (1/3)*k
@@ -46,9 +47,10 @@ def calculate_kd(df):
 
 @st.cache_data(ttl=300)
 def get_rk():
-    """獲取成交排行 (拆分短行防截斷)"""
+    """獲取台股排行數據 (拆分短行防截斷)"""
     res = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
     try:
+        # 上市
         u1 = "https://www.twse.com.tw/exchangeReport/"
         u1 += "MI_INDEX?response=json&type=ALLBUT0999"
         r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
@@ -58,7 +60,7 @@ def get_rk():
         d1['v'] = pd.to_numeric(d1['金額'].str.replace(',',''), 
                                 errors='coerce')
         res["TWSE"] = d1.sort_values('v', ascending=False).head(15)
-        
+        # 上櫃
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/"
         u2 += "daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
@@ -71,7 +73,7 @@ def get_rk():
     except: pass
     return res
 
-# === 3. 核心 112 檔名單 (垂直短行排版) ===
+# === 3. 核心 112 檔名單 ===
 SL = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", 
     "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", 
@@ -109,23 +111,24 @@ SL = {
 }
 
 # === 4. 介面設計 ===
-st.title("📡 股神旗艦整合 V14.0")
+st.title("📡 股神旗艦整合 V15.0")
 tbs = st.tabs(["🎯 雷達評分", "💰 成交排行", "📈 互動看盤", 
                "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
 
 with tbs[0]:
     if st.button("🚀 啟動掃描", use_container_width=True):
-        raw = yf.download(list(SL.keys()), period="2y", 
-                          group_by='ticker', silent=True)
+        # 關鍵優化：下載後統一進入數據過濾，避免 MultiIndex 型態錯誤
+        data_raw = yf.download(list(SL.keys()), period="2y", 
+                               group_by='ticker', silent=True)
         rl = []
         for t, name in SL.items():
             try:
-                df = clean_it(raw[t])
+                df = clean_it(data_raw[t])
                 if len(df) < 60: continue
                 cl, v5 = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
                 if v5 < 1000000: continue
-                sc, tags = 0, []
                 ma20 = df['Close'].rolling(20).mean().iloc[-1]
+                sc, tags = 0, []
                 if cl > ma20: sc += 20; tags.append("[站上月線]")
                 dkd = calculate_kd(df)
                 if dkd['K'].iloc[-1] > dkd['D'].iloc[-1]:
@@ -152,7 +155,7 @@ with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 核心修復：使用 .history 避開 download 的 TypeError 
+        # 核心修復：改用 .history 取得最原始結構，穩定性最高
         d = clean_it(yf.Ticker(tid).history(period="1y"))
         if not d.empty:
             d = calculate_kd(d)
@@ -172,11 +175,11 @@ with tbs[2]:
 with tbs[5]:
     st.subheader("🔍 全台股：低檔爆量偵測")
     if st.button("🚀 開始全市場掃描"):
-        with st.spinner("掃描前 250 名熱門標的..."):
+        with st.spinner("掃描前 250 名標的..."):
             rk_m = get_rk()
             cands = [str(x) + ".TW" for x in rk_m["TWSE"]['代號']] + \
                     [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
-            # 批次下載時使用 group_by='ticker' 提高穩定性
+            # 下載半年資料作為篩選池
             raw_m = yf.download(cands, period="6mo", group_by='ticker', 
                                 silent=True)
             res_l = []

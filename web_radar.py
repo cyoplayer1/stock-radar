@@ -11,9 +11,62 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# === 2. 核心名單 (112檔完整垂直排版，防截斷) ===
+# === 2. 核心清洗與計算函數 ===
+def clean_data(df):
+    """處理 yfinance MultiIndex 問題，避免 TypeError"""
+    if df is None or df.empty: return df
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    return df
+
+def calculate_kd(df):
+    df = clean_data(df)
+    if len(df) < 9: return df
+    l9 = df['Low'].rolling(9).min()
+    h9 = df['High'].rolling(9).max()
+    rsv = (df['Close'] - l9) / (h9 - l9) * 100
+    k, d = 50.0, 50.0
+    k_l, d_l = [], []
+    for v in rsv:
+        if pd.isna(v): k_l.append(k); d_l.append(d)
+        else:
+            k = (2/3)*k + (1/3)*v
+            d = (2/3)*d + (1/3)*k
+            k_l.append(k); d_l.append(d)
+    df['K'], df['D'] = k_l, d_l
+    return df
+
+@st.cache_data(ttl=300)
+def get_ranks():
+    """獲取排行，拆分網址防止 GitHub 截斷報錯"""
+    r_data = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
+    try:
+        # 上市排行
+        u1 = "https://www.twse.com.tw/exchangeReport/"
+        u1 += "MI_INDEX?response=json&type=ALLBUT0999"
+        res1 = requests.get(u1, headers=HEADERS, timeout=10).json()
+        d1 = pd.DataFrame(res1['tables'][8]['data'], columns=res1['tables'][8]['fields'])
+        d1['val'] = pd.to_numeric(d1['成交金額'].str.replace(',',''), errors='coerce')
+        r_data["TWSE"] = d1.sort_values('val', ascending=False).head(15)[['證券代號','證券名稱','成交金額']]
+        
+        # 上櫃排行
+        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/"
+        u2 += "daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
+        res2 = requests.get(u2, headers=HEADERS, timeout=10).json()
+        d2 = pd.DataFrame(res2['aaData'])
+        d2['val'] = pd.to_numeric(d2[9].str.replace(',',''), errors='coerce')
+        r_data["TPEx"] = d2.sort_values('val', ascending=False).head(15)[[0, 1, 9]]
+        r_data["TPEx"].columns = ['證券代號','證券名稱','成交金額']
+    except: pass
+    return r_data
+
+# === 3. 完整 112 檔名單 (垂直定義防截斷) ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -42,42 +95,25 @@ STOCKS = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦"
 }
 
-# === 3. 核心清洗與計算函數 ===
-def clean_data(df):
-    """處理 yfinance MultiIndex 問題"""
-    if df is None or df.empty: return df
-    df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    return df
+# === 4. 介面設計 ===
+st.title("📡 股神系統旗艦整合版 V5.0")
+tbs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
 
-def calculate_kd(df):
-    df = clean_data(df)
-    if len(df) < 9: return df
-    low_9 = df['Low'].rolling(9).min()
-    high_9 = df['High'].rolling(9).max()
-    rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
-    k, d = 50.0, 50.0
-    k_l, d_l = [], []
-    for val in rsv:
-        if pd.isna(val): k_l.append(k); d_l.append(d)
-        else:
-            k = (2/3)*k + (1/3)*val
-            d = (2/3)*d + (1/3)*k
-            k_l.append(k); d_l.append(d)
-    df['K'], df['D'] = k_l, d_l
-    return df
-
-@st.cache_data(ttl=300)
-def get_market_ranks():
-    ranks = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
-    try:
-        r1 = requests.get("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", headers=HEADERS, timeout=10).json()
-        df1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
-        df1['金額'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
-        ranks["TWSE"] = df1.sort_values('金額', ascending=False).head(15)[['證券代號','證券名稱','成交金額']]
-        
-        r2 = requests.get("
+with tbs[0]:
+    if st.button("🚀 啟動完整掃描", use_container_width=True):
+        all_d = yf.download(list(STOCKS.keys()), period="2y", group_by='ticker', silent=True)
+        res = []
+        for t, name in STOCKS.items():
+            try:
+                df = clean_data(all_d[t].dropna())
+                if len(df) < 60: continue
+                close, vol5 = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
+                if vol5 < 1000000: continue
+                ma20 = df['Close'].rolling(20).mean().iloc[-1]
+                score, tags = 0, []
+                if close > ma20: score += 20; tags.append("[站上月線]")
+                dfkd = calculate_kd(df)
+                if dfkd['K'].iloc[-1] > dfkd['D'].iloc[-1]:
+                    if dfkd['K'].iloc[-2] <= dfkd['D'].iloc[-2]: score += 40; tags.append("[日剛金叉]")
+                    else: score += 20; tags.append("[日偏多]")
+                res.append({'標的': f"{t.split('.')[0]} {name}", '評分': f"{score

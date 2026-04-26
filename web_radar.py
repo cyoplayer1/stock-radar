@@ -12,19 +12,16 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神雷達", page_icon="📡", layout="wide")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# === 2. 核心清洗與計算 (解決 TypeError 關鍵) ===
+# === 2. 數據清洗與計算 (解決 TypeError 關鍵) ===
 def clean_it(df):
-    """徹底處理資料格式問題，避免 TypeError"""
+    """處理資料格式問題，避免 TypeError"""
     if df is None or df.empty: return None
     df = df.copy()
-    # 針對 Python 3.14 多層索引強制降維
     if hasattr(df.columns, 'nlevels') and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
-    # 強制轉為純數值型態
     for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
-    # 確保 Close 欄位是正常的
     if 'Close' not in df.columns: return None
     return df.dropna(subset=['Close'])
 
@@ -46,28 +43,29 @@ def calculate_kd(df):
 
 @st.cache_data(ttl=300)
 def get_rk():
-    """獲取台股排行數據 (防截斷排版)"""
+    """獲取台股排行，強制欄位命名避免 KeyError"""
     res = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
     try:
+        # 上市
         u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
         r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
-        d1 = pd.DataFrame(r1['tables'][8]['data'])
-        d1 = d1.iloc[:, [0, 1, 4]]
+        d1 = pd.DataFrame(r1['tables'][8]['data']).iloc[:, [0, 1, 4]]
+        # 強制命名保證不噴 KeyError
         d1.columns = ['代號', '名稱', '金額']
         d1['v'] = pd.to_numeric(d1['金額'].str.replace(',',''), errors='coerce')
-        res["TWSE"] = d1.sort_values('v', ascending=False).head(15)
+        res["TWSE"] = d1.sort_values('v', ascending=False).head(15).copy()
         
+        # 上櫃
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
-        d2 = pd.DataFrame(r2['aaData'])
-        d2 = d2.iloc[:, [0, 1, 9]]
+        d2 = pd.DataFrame(r2['aaData']).iloc[:, [0, 1, 9]]
         d2.columns = ['代號', '名稱', '金額']
         d2['v'] = pd.to_numeric(d2['金額'].str.replace(',',''), errors='coerce')
-        res["TPEx"] = d2.sort_values('v', ascending=False).head(15)
+        res["TPEx"] = d2.sort_values('v', ascending=False).head(15).copy()
     except: pass
     return res
 
-# === 3. 核心名單 (垂直短行排版) ===
+# === 3. 核心 112 檔名單 (垂直短行排版) ===
 SL = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", 
     "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", 
@@ -104,40 +102,33 @@ SL = {
     "6147.TWO": "頎邦"
 }
 
-# === 4. 網頁介面 ===
-st.title("📡 股神整合旗艦 V18.0")
+# === 4. 介面設計 ===
+st.title("📡 股神整合旗艦 V19.0")
 tbs = st.tabs(["🎯 雷達評分", "💰 成交排行", "📈 互動看盤", 
                "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
 
 with tbs[0]:
     if st.button("🚀 啟動掃描", use_container_width=True):
-        # 使用穩定下載法並手動提取數據
         data_raw = yf.download(list(SL.keys()), period="2y", silent=True)
         rl = []
         for t, name in SL.items():
             try:
-                # 安全提取 DataFrame 分片
+                # 安全處理 MultiIndex 下載結構
                 if isinstance(data_raw.columns, pd.MultiIndex):
                     temp_df = data_raw.xs(t, axis=1, level=1)
                 else: temp_df = data_raw[t]
-                
                 df = clean_it(temp_df)
                 if df is None or len(df) < 60: continue
-                
-                cl = df['Close'].iloc[-1]
-                v5 = df['Volume'].tail(5).mean()
+                cl, v5 = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
                 if v5 < 1000000: continue
-                
                 sc, tags = 0, []
-                ma20 = df['Close'].rolling(20).mean().iloc[-1]
-                if cl > ma20: sc += 20; tags.append("[站上月線]")
-                
+                if cl > df['Close'].rolling(20).mean().iloc[-1]:
+                    sc += 20; tags.append("[站上月線]")
                 dkd = calculate_kd(df)
                 if dkd['K'].iloc[-1] > dkd['D'].iloc[-1]:
                     if dkd['K'].iloc[-2] <= dkd['D'].iloc[-2]: 
                         sc += 40; tags.append("[日金叉]")
                     else: sc += 20; tags.append("[日偏多]")
-                
                 rl.append({'標的': f"{t.split('.')[0]} {name}", 
                            '評分': f"{sc}分", 
                            '收盤': round(float(cl), 2), 
@@ -151,14 +142,18 @@ with tbs[0]:
 with tbs[1]:
     rk_d = get_rk()
     c1, c2 = st.columns(2)
-    with c1: st.subheader("📈 上市排行"); st.table(rk_d["TWSE"].iloc[:,:3])
-    with c2: st.subheader("📉 上櫃排行"); st.table(rk_d["TPEx"].iloc[:,:3])
+    # 排行顯示部分
+    with c1: 
+        st.subheader("📈 上市排行")
+        if not rk_d["TWSE"].empty: st.table(rk_d["TWSE"].iloc[:,:3])
+    with c2: 
+        st.subheader("📉 上櫃排行")
+        if not rk_d["TPEx"].empty: st.table(rk_d["TPEx"].iloc[:,:3])
 
 with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 關鍵修復：單檔抓取改用 history 最穩定
         d = clean_it(yf.Ticker(tid).history(period="1y"))
         if d is not None:
             d = calculate_kd(d)
@@ -178,28 +173,37 @@ with tbs[2]:
 with tbs[5]:
     st.subheader("🔍 全台股：低檔爆量偵測")
     if st.button("🚀 開始大掃描"):
-        with st.spinner("正在安全抓取熱門標的..."):
+        with st.spinner("掃描市場熱門標的..."):
             rk_m = get_rk()
-            cands = [str(x) + ".TW" for x in rk_m["TWSE"]['代號']] + \
-                    [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
-            raw_m = yf.download(cands, period="6mo", silent=True)
-            res_l = []
-            for tc in cands:
-                try:
-                    if isinstance(raw_m.columns, pd.MultiIndex):
-                        temp_m = raw_m.xs(tc, axis=1, level=1)
-                    else: temp_m = raw_m[tc]
-                    
-                    dfm = clean_it(temp_m)
-                    if dfm is None: continue
-                    vn, va = dfm['Volume'].iloc[-1], dfm['Volume'].iloc[-6:-1].mean()
-                    lp, hp, cp = dfm['Low'].min(), dfm['High'].max(), dfm['Close'].iloc[-1]
-                    pos = (cp - lp) / (hp - lp) if hp != lp else 1
-                    if vn > va * 1.8 and pos < 0.25:
-                        res_l.append({'代號':tc, '價':round(float(cp),2), 
-                                      '倍數':round(float(vn/va),2), 
-                                      '位置':f"{round(float(pos*100),1)}%"})
-                except: continue
-            if res_l: 
-                df_res = pd.DataFrame(res_l).sort_values('倍數', ascending=False)
-                st.dataframe(df_res, use_container_width=True)
+            # 修正 KeyError 的關鍵：確保代號欄位存在
+            cands = []
+            if not rk_m["TWSE"].empty:
+                cands += [str(x) + ".TW" for x in rk_m["TWSE"]['代號']]
+            if not rk_m["TPEx"].empty:
+                cands += [str(x) + ".TWO" for x in rk_m["TPEx"]['代號']]
+            
+            if cands:
+                raw_m = yf.download(cands, period="6mo", silent=True)
+                res_l = []
+                for tc in cands:
+                    try:
+                        if isinstance(raw_m.columns, pd.MultiIndex):
+                            temp_m = raw_m.xs(tc, axis=1, level=1)
+                        else: temp_m = raw_m[tc]
+                        dfm = clean_it(temp_m)
+                        if dfm is None: continue
+                        vn, va = dfm['Volume'].iloc[-1], \
+                                 dfm['Volume'].iloc[-6:-1].mean()
+                        lp, hp, cp = dfm['Low'].min(), dfm['High'].max(), \
+                                     dfm['Close'].iloc[-1]
+                        pos = (cp - lp) / (hp - lp) if hp != lp else 1
+                        if vn > va * 1.8 and pos < 0.25:
+                            res_l.append({'代號':tc, '價':round(float(cp),2), 
+                                          '倍數':round(float(vn/va),2), 
+                                          '位置':f"{round(float(pos*100),1)}%"})
+                    except: continue
+                if res_l: 
+                    df_res = pd.DataFrame(res_l).sort_values('倍數', 
+                                                             ascending=False)
+                    st.dataframe(df_res, use_container_width=True)
+            else: st.warning("無法獲取市場排行標的。")

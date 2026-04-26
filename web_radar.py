@@ -34,7 +34,8 @@ def calculate_kd(df):
     rsv = (df['Close'] - low_9) / (high_9 - low_9) * 100
     k, d, kl, dl = 50.0, 50.0, [], []
     for v in rsv:
-        if pd.isna(v): kl.append(k); dl.append(d)
+        if pd.isna(v): 
+            kl.append(k); dl.append(d)
         else:
             k = (2/3)*k + (1/3)*v
             d = (2/3)*d + (1/3)*k
@@ -61,7 +62,7 @@ def get_ranks():
     except: pass
     return rd
 
-# === 3. 完整 112 檔名單 ===
+# === 3. 完整 112 檔名單 (防截斷排版) ===
 SL = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -90,8 +91,8 @@ SL = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦"
 }
 
-# === 4. 介面設計 ===
-st.title("📡 股神系統旗艦整合版 V6.1")
+# === 4. 網頁介面 ===
+st.title("📡 股神系統旗艦整合版 V6.2")
 tbs = st.tabs(["🎯 雷達評分", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
 
 with tbs[0]:
@@ -111,9 +112,19 @@ with tbs[0]:
                 if dkd['K'].iloc[-1] > dkd['D'].iloc[-1]:
                     if dkd['K'].iloc[-2] <= dkd['D'].iloc[-2]: sc += 40; tags.append("[日金叉]")
                     else: sc += 20; tags.append("[日偏多]")
-                rl.append({'標的': f"{t.split('.')[0]} {name}", '評分': f"{sc}分", '收盤': round(float(cl), 2), '狀態': " + ".join(tags) if tags else "休息", 'Sort': sc})
+                # 短行定義防止 GitHub 截斷
+                item = {
+                    '標的': f"{t.split('.')[0]} {name}",
+                    '評分': f"{sc}分",
+                    '收盤': round(float(cl), 2),
+                    '狀態': " + ".join(tags) if tags else "休息",
+                    'Sort': sc
+                }
+                rl.append(item)
             except: continue
-        if rl: st.dataframe(pd.DataFrame(rl).sort_values('Sort', ascending=False).drop(columns='Sort'), use_container_width=True)
+        if rl: 
+            df_rl = pd.DataFrame(rl).sort_values('Sort', ascending=False)
+            st.dataframe(df_rl.drop(columns='Sort'), use_container_width=True)
 
 with tbs[1]:
     rk = get_ranks()
@@ -125,13 +136,14 @@ with tbs[2]:
     sid = st.text_input("🔍 代號", value="2330")
     if sid:
         tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 下載單檔時強制定向清洗
-        d = yf.download(tid, period="1y", silent=True)
-        d = clean_data(d)
+        # 下載單檔並進行格式清洗
+        d_raw = yf.download(tid, period="1y", silent=True)
+        d = clean_data(d_raw)
         if not d.empty:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
+            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], 
+                                         low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
             fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
@@ -140,18 +152,18 @@ with tbs[2]:
 with tbs[5]:
     st.subheader("🔍 全台股：低檔爆量強勢股快篩")
     if st.button("🚀 開始全市場掃描"):
-        with st.spinner("正在掃描市場熱門標的..."):
-            rk = get_ranks()
-            cands = list(rk["TWSE"]['證券代號'] + ".TW") + list(rk["TPEx"]['證券代號'] + ".TWO")
+        with st.spinner("掃描中..."):
+            rk_m = get_ranks()
+            cands = list(rk_m["TWSE"]['證券代號'] + ".TW") + list(rk_m["TPEx"]['證券代號'] + ".TWO")
             raw_m = yf.download(cands, period="6mo", group_by='ticker', silent=True)
             res_l = []
-            for t in cands:
+            for t_code in cands:
                 try:
-                    df = clean_data(raw_m[t])
-                    vn, va = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-                    lp, hp, cp = df['Low'].min(), df['High'].max(), df['Close'].iloc[-1]
+                    df_m = clean_data(raw_m[t_code])
+                    vn, va = df_m['Volume'].iloc[-1], df_m['Volume'].iloc[-6:-1].mean()
+                    lp, hp, cp = df_m['Low'].min(), df_m['High'].max(), df_m['Close'].iloc[-1]
                     pos = (cp - lp) / (hp - lp) if hp != lp else 1
                     if vn > va * 1.8 and pos < 0.25:
-                        res_l.append({'代號':t, '收盤':round(float(cp),2), '倍數':round(float(vn/va),2), '位置':f"{round(float(pos*100),1)}%"})
+                        res_l.append({'代號':t_code, '價':round(float(cp),2), '倍數':round(float(vn/va),2), '位置':f"{round(float(pos*100),1)}%"})
                 except: continue
             if res_l: st.dataframe(pd.DataFrame(res_l).sort_values('倍數', ascending=False), use_container_width=True)

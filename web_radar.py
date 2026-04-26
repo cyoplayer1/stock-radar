@@ -121,6 +121,7 @@ def check_low_breakout(ticker, name):
             return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now/v_avg, 2), '今日張數': int(v_now/1000)}
     except: return None
 
+# === 4. 112 檔名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -232,11 +233,10 @@ with tabs[5]:
     st.subheader("🔍 全台股：低檔爆量強勢股偵測")
     st.info("""
     💡 **篩選邏輯說明：**
-    1. **位階 (Price Position) < 25%**：股價處於過去半年底部 25% 區域。
-    2. **量能爆發 > 1.8 倍**：今日成交量大於 5 天平均量 1.8 倍。
-    3. **流動性篩選**：自動從全台股每日「成交金額排行」前 250 名中進行掃描。
+    1. **位階 (Price Position) < 25%**：股價處於過去半年（180天）最高與最低區間的底部 25% 區域，確保目前不追高。
+    2. **量能爆發 > 1.8 倍**：今日成交量大於過去 5 天平均成交量的 1.8 倍，代表有主力資金進場敲進。
+    3. **流動性篩選**：系統會自動從全台股每日「成交金額排行」前 250 名中進行掃描，避開沒量的小型股。
     """)
-    
     if st.button("🚀 開始全市場大掃描", use_container_width=True):
         pool, results = [], []
         df_twse, df_tpex = get_rank("TWSE"), get_rank("TPEx")
@@ -246,18 +246,18 @@ with tabs[5]:
             for _, r in df_tpex.head(100).iterrows(): pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
         
         if pool:
-            pb5, txt5 = st.progress(0), st.empty()
-            prc5 = 0
+            pb_low, txt_low = st.progress(0), st.empty()
+            prc_low = 0
             with ThreadPoolExecutor(max_workers=10) as executor:
                 f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
                 for f in as_completed(f_to_s):
-                    prc5 += 1
-                    pb5.progress(prc5 / len(pool))
-                    txt5.text(f"🔄 掃描進度: {prc5}/{len(pool)}")
+                    prc_low += 1
+                    pb_low.progress(prc_low / len(pool))
+                    txt_low.text(f"🔄 掃描進度: {prc_low}/{len(pool)}")
                     if f.result(): results.append(f.result())
-            pb5.empty(); txt5.empty()
+            pb_low.empty(); txt_low.empty()
             if results: st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
-            else: st.warning("今日暫無符合條件標的。")
+            else: st.warning("今日暫無符合條件之標的。")
 
 with tabs[6]:
     st.subheader("💎 三大法人昨日買賣超排行榜")

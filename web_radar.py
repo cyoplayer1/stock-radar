@@ -132,4 +132,123 @@ def analyze_etf_yield(ticker, name):
             return None
         
         close = df['Close'].iloc[-1]
-        ma20 = df['Close'].rolling(window=2
+        ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
+        bias = ((close - ma20) / ma20) * 100
+        
+        status = "🟢 折價 (適合分批建倉)" if bias < 0 else "🔴 溢價 (建議觀望)"
+        return {
+            "ETF名稱": name, 
+            "收盤價": round(close, 2), 
+            "月線(20MA)": round(ma20, 2),
+            "乖離率(%)": round(bias, 2),
+            "進場判定": status
+        }
+    except Exception: 
+        return None
+
+def analyze_volume_breakout(ticker, stock_name):
+    """第五分頁：異常爆量買賣監控"""
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="1mo")
+        df.dropna(subset=['Close', 'Volume'], inplace=True)
+        if len(df) < 6: 
+            return None
+
+        vol_today = df['Volume'].iloc[-1]
+        vol_5ma = df['Volume'].iloc[-6:-1].mean() 
+        close_today = df['Close'].iloc[-1]
+        open_today = df['Open'].iloc[-1]
+        close_yest = df['Close'].iloc[-2]
+
+        if vol_5ma < 500000: 
+            return None
+
+        vol_ratio = vol_today / vol_5ma if vol_5ma > 0 else 0
+
+        if vol_ratio > 1.5:
+            status = ""
+            if close_today > open_today and close_today > close_yest:
+                status = "🔥 爆量上漲 (買盤湧入)"
+            elif close_today < open_today and close_today < close_yest:
+                status = "🩸 爆量下跌 (賣壓出籠)"
+            else:
+                status = "⚠️ 爆量震盪 (多空交戰)"
+
+            clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
+            return {
+                '標的名稱': f"{clean_ticker} {stock_name}",
+                '收盤價': round(close_today, 2),
+                '今日成交量(張)': int(vol_today / 1000),
+                '5日均量(張)': int(vol_5ma / 1000),
+                '爆量倍數': round(vol_ratio, 1),
+                '異動狀態': status
+            }
+        return None
+    except Exception: 
+        return None
+
+# ================= 股市排行系統 函數 =================
+@st.cache_data(ttl=300)
+def get_twse_top_15():
+    try:
+        res = requests.get("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", headers=HEADERS, verify=False, timeout=10)
+        data = res.json()
+        stock_data, fields = None, None
+        if 'tables' in data:
+            for table in data['tables']:
+                if 'fields' in table and 'data' in table:
+                    if '證券代號' in table['fields'] and '成交金額' in table['fields']:
+                        fields, stock_data = table['fields'], table['data']
+                        break
+        if not stock_data:
+            for key, val in data.items():
+                if key.startswith('fields') and isinstance(val, list):
+                    if '證券代號' in val and '成交金額' in val:
+                        data_key = key.replace('fields', 'data')
+                        if data_key in data:
+                            fields, stock_data = val, data[data_key]
+                            break
+        if not stock_data: 
+            return None, data.get('stat', '找不到上市資料')
+            
+        df = pd.DataFrame(stock_data, columns=fields)[['證券代號', '證券名稱', '成交金額']]
+        df['成交金額'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df_sorted = df.sort_values(by='成交金額', ascending=False).head(15)
+        df_sorted['成交金額(元)'] = df_sorted['成交金額'].apply(lambda x: f"{int(x):,}")
+        df_sorted.index = range(1, 16)
+        return df_sorted.drop(columns=['成交金額']), "OK"
+    except Exception as e: 
+        return None, f"上市錯誤: {e}"
+
+@st.cache_data(ttl=300)
+def get_tpex_top_15():
+    try:
+        res = requests.get("https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json", headers=HEADERS, verify=False, timeout=10)
+        data = res.json()
+        stock_data = []
+        if 'aaData' in data and data['aaData']: 
+            stock_data = data['aaData']
+        elif 'tables' in data:
+            for table in data['tables']:
+                if 'data' in table and len(table['data']) > 0:
+                    stock_data = table['data']
+                    break
+        if not stock_data: 
+            return None, "找不到上櫃資料"
+            
+        df = pd.DataFrame(stock_data)
+        col_val = 9 if df.shape[1] >= 10 else df.shape[1] - 2
+        df = df[[0, 1, col_val]]
+        df.columns = ['證券代號', '證券名稱', '成交金額']
+        df['成交金額'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        df_sorted = df.sort_values(by='成交金額', ascending=False).head(15)
+        df_sorted['成交金額(元)'] = df_sorted['成交金額'].apply(lambda x: f"{int(x):,}")
+        df_sorted.index = range(1, 16)
+        return df_sorted.drop(columns=['成交金額']), "OK"
+    except Exception as e: 
+        return None, f"上櫃錯誤: {e}"
+
+# ================= 名單設定 =================
+STOCKS = {
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電

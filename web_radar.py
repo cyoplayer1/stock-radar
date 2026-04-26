@@ -3,66 +3,90 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests, warnings, time, urllib3
+import requests
+import warnings
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib3
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="股神系統雷達", page_icon="📡", layout="wide")
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+UA += "AppleWebKit/537.36 (KHTML, like Gecko) "
+UA += "Chrome/120.0.0.0 Safari/537.36"
+HEADERS = {"User-Agent": UA}
 
-# === 2. 核心清洗與計算函數 (解決 TypeError 關鍵) ===
-def clean_it(df):
-    """徹底處理 MultiIndex 並強制轉為純數值型態"""
-    if df is None or df.empty: return df
-    df = df.copy()
-    # 剝離多層索引 (yfinance 3.14 環境常見問題)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    # 確保基本欄位轉為數值型態，避免 TypeError
-    for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[col] if 'col' in locals() else df[c], errors='coerce')
-    return df.dropna()
-
+# === 2. 核心計算函數 (保留原始邏輯) ===
 def calculate_kd(df):
-    df = clean_it(df)
     if len(df) < 9: return df
-    l9, h9 = df['Low'].rolling(9).min(), df['High'].rolling(9).max()
-    rsv = (df['Close'] - l9) / (h9 - l9) * 100
-    k, d, kl, dl = 50.0, 50.0, [], []
-    for v in rsv:
-        if pd.isna(v): kl.append(k); dl.append(d)
+    df['9_min'] = df['Low'].rolling(window=9).min()
+    df['9_max'] = df['High'].rolling(window=9).max()
+    df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
+    k_v, d_v = [], []
+    k, d = 50.0, 50.0
+    for rsv in df['RSV']:
+        if pd.isna(rsv):
+            k_v.append(50.0); d_v.append(50.0)
         else:
-            k = (2/3)*k + (1/3)*v
-            d = (2/3)*d + (1/3)*k
-            kl.append(k); dl.append(d)
-    df['K'], df['D'] = kl, dl
+            k = (2/3) * k + (1/3) * rsv
+            d = (2/3) * d + (1/3) * k
+            k_v.append(k); d_v.append(d)
+    df['K'], df['D'] = k_v, d_v
     return df
 
-@st.cache_data(ttl=300)
-def get_rk():
-    """獲取成交排行"""
-    res = {"TWSE": pd.DataFrame(), "TPEx": pd.DataFrame()}
+def analyze_stock_score(ticker, name):
     try:
-        u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-        r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
-        d1 = pd.DataFrame(r1['tables'][8]['data'], columns=r1['tables'][8]['fields'])
-        d1['v'] = pd.to_numeric(d1['成交金額'].str.replace(',',''), errors='coerce')
-        res["TWSE"] = d1.sort_values('v', ascending=False).head(15)[['證券代號','證券名稱','成交金額']]
-        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-        r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
-        d2 = pd.DataFrame(r2['aaData'])
-        d2['v'] = pd.to_numeric(d2[9].str.replace(',',''), errors='coerce')
-        res["TPEx"] = d2.sort_values('v', ascending=False).head(15)[[0, 1, 9]]
-        res["TPEx"].columns = ['證券代號','證券名稱','成交金額']
-    except: pass
-    return res
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="2y")
+        if df.empty or len(df) < 60: return None
+        close = df['Close'].iloc[-1]
+        vol_5d = df['Volume'].tail(5).mean()
+        if vol_5d < 1000000: return None # 1000張門檻
+        score, tags = 0, []
+        ma20 = df['Close'].rolling(20).mean().iloc[-1]
+        if close > ma20: score += 20; tags.append("[站上月線]")
+        df = calculate_kd(df.copy())
+        dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
+        dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
+        if (dk > dd) and (dyk <= dyd): score += 40; tags.append("[日剛金叉]")
+        elif dk > dd: score += 20; tags.append("[日線偏多]")
+        df_w = df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+        df_w = calculate_kd(df_w.copy())
+        wk = df_w['K'].iloc[-1]
+        if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
+        tid = ticker.replace('.TW', '').replace('.TWO', '')
+        return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
+    except: return None
 
-# === 3. 完整 112 檔名單 (防截斷垂直排版) ===
-SL = {
+# === 3. 成交排行 (修復上櫃跑不出來) ===
+@st.cache_data(ttl=300)
+def get_rank(m_type):
+    try:
+        if m_type == "TWSE":
+            u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
+            res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
+            df = pd.DataFrame(res['tables'][8]['data'])
+            df.columns = res['tables'][8]['fields']
+            df = df[['證券代號', '證券名稱', '成交金額']]
+        else:
+            u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
+            res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
+            df = pd.DataFrame(res.get('aaData', []))
+            df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
+            v_col = df_n.sum().idxmax()
+            df = df[[0, 1, v_col]]
+            df.columns = ['證券代號', '證券名稱', '成交金額']
+        df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
+        df = df.sort_values('值', ascending=False).head(15)
+        df['金額'] = df['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+        return df[['證券代號','證券名稱','金額']].reset_index(drop=True)
+    except: return None
+
+# === 4. 完整 112 檔名單 (垂直定義防截斷) ===
+STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
     "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
@@ -90,68 +114,77 @@ SL = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦"
 }
 
-# === 4. 網頁介面 ===
-st.title("📡 股神系統旗艦整合版 V10.0")
-tbs = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 市場快篩"])
+# === 5. 介面設計 ===
+st.title("📡 股神系統旗艦整合版")
+t1, t2, t3, t4, t5 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控"])
 
-with tbs[0]:
-    if st.button("🚀 啟動完整掃描", use_container_width=True):
-        raw = yf.download(list(SL.keys()), period="2y", group_by='ticker', silent=True)
-        rl = []
-        for t, name in SL.items():
-            try:
-                df = clean_it(raw[t])
-                if len(df) < 60: continue
-                cl, v5 = df['Close'].iloc[-1], df['Volume'].tail(5).mean()
-                if v5 < 1000000: continue
-                sc, tags = 0, []
-                ma20 = df['Close'].rolling(20).mean().iloc[-1]
-                if cl > ma20: sc += 20; tags.append("[站上月線]")
-                dkd = calculate_kd(df)
-                if dkd['K'].iloc[-1] > dkd['D'].iloc[-1]:
-                    if dkd['K'].iloc[-2] <= dkd['D'].iloc[-2]: sc += 40; tags.append("[日金叉]")
-                    else: sc += 20; tags.append("[日偏多]")
-                rl.append({'標的': f"{t.split('.')[0]} {name}", '評分': f"{sc}分", '收盤': round(float(cl), 2), '狀態': " + ".join(tags) if tags else "休息", 'Sort': sc})
-            except: continue
-        if rl: st.dataframe(pd.DataFrame(rl).sort_values('Sort', ascending=False).drop(columns='Sort'), use_container_width=True)
+with t1:
+    if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
+        start_t = time.time()
+        res, prc = [], 0
+        pb, txt = st.progress(0), st.empty()
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
+            for f in as_completed(futs):
+                prc += 1
+                pb.progress(prc / len(STOCKS))
+                txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
+                if f.result(): res.append(f.result())
+        pb.empty(); txt.empty()
+        st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
+        if res:
+            df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
+            st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
+    if 'df_radar' in st.session_state:
+        st.dataframe(st.session_state['df_radar'], use_container_width=True)
 
-with tbs[1]:
-    rk = get_rk()
+with t2:
+    if st.button("🔄 刷新即時排行"): st.cache_data.clear()
     c1, c2 = st.columns(2)
-    with c1: st.subheader("📈 上市排行"); st.table(rk["TWSE"])
-    with c2: st.subheader("📉 上櫃排行"); st.table(rk["TPEx"])
+    with c1:
+        st.subheader("📈 上市排行 (TWSE)")
+        df1 = get_rank("TWSE")
+        if df1 is not None: st.table(df1)
+    with c2:
+        st.subheader("📉 上櫃排行 (TPEx)")
+        df2 = get_rank("TPEx")
+        if df2 is not None: st.table(df2)
 
-with tbs[2]:
-    sid = st.text_input("🔍 代號", value="2330")
+with t3:
+    sid = st.text_input("🔍 代號 (如 2330)", value="2330")
     if sid:
-        tid = sid + (".TWO" if sid[0] in '34568' else ".TW")
-        # 下載後立即清洗格式，避免 TypeError
-        d_raw = yf.download(tid, period="1y", silent=True)
-        d = clean_it(d_raw)
+        tid = sid + ".TW" if "." not in sid else sid
+        d = yf.Ticker(tid).history(period="1y")
         if not d.empty:
             d = calculate_kd(d)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
+            k_trace = go.Candlestick(x=d.index, open=d['Open'], high=d['High'], 
+                                     low=d['Low'], close=d['Close'], name='K線')
+            fig.add_trace(k_trace, row=1, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
             fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
             fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-with tbs[5]:
-    st.subheader("🔍 全台股：低檔爆量偵測")
-    if st.button("🚀 開始市場大掃描"):
-        with st.spinner("掃描市場熱門標的..."):
-            rk = get_rk()
-            cands = list(rk["TWSE"]['證券代號'] + ".TW") + list(rk["TPEx"]['證券代號'] + ".TWO")
-            raw_m = yf.download(cands, period="6mo", group_by='ticker', silent=True)
-            res_l = []
-            for t in cands:
-                try:
-                    df = clean_it(raw_m[t])
-                    vn, va = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
-                    lp, hp, cp = df['Low'].min(), df['High'].max(), df['Close'].iloc[-1]
-                    pos = (cp - lp) / (hp - lp) if hp != lp else 1
-                    if vn > va * 1.8 and pos < 0.25:
-                        res_l.append({'代號':t, '收盤':round(float(cp),2), '倍數':round(float(vn/va),2), '位置':f"{round(float(pos*100),1)}%"})
-                except: continue
-            if res_l: st.dataframe(pd.DataFrame(res_l).sort_values('倍數', ascending=False), use_container_width=True)
+with t4:
+    if st.button("啟動波段掃描"):
+        brs = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="3mo")
+            if df.empty or len(df) < 20: continue
+            df['MA20'] = df['Close'].rolling(20).mean()
+            df['UP'] = df['MA20'] + (2 * df['Close'].rolling(20).std())
+            if df['Close'].iloc[-1] > df['UP'].iloc[-1]:
+                brs.append({'標的':f"{t} {n}",'價':round(df['Close'].iloc[-1],2)})
+        if brs: st.dataframe(pd.DataFrame(brs), use_container_width=True)
+
+with t5:
+    if st.button("啟動量能監控"):
+        vls = []
+        for t, n in STOCKS.items():
+            df = yf.Ticker(t).history(period="1mo")
+            if df.empty or len(df) < 6: continue
+            v_now, v_avg = df['Volume'].iloc[-1], df['Volume'].iloc[-6:-1].mean()
+            if v_now > v_avg * 1.8:
+                vls.append({'標的':f"{t} {n}",'倍數':round(v_now/v_avg,1)})
+        if vls: st.dataframe(pd.DataFrame(vls).sort_values(by='倍數', ascending=False), use_container_width=True)

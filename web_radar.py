@@ -43,13 +43,48 @@ def calculate_macd(df):
     df['Hist'] = df['MACD'] - df['Signal']
     return df
 
-# === 3. 六星雷達核心邏輯 ===
-def analyze_stock_score(ticker, name):
+# === 3. 名單字典 (用於對照名稱) ===
+STOCKS_DICT = {
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
+    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
+    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
+    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
+    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
+    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
+    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
+    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
+    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
+    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
+    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
+    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
+    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
+    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
+    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
+    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
+    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
+    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
+    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
+    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
+    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
+    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
+    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
+    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
+    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
+}
+
+# === 4. 六星雷達核心邏輯 (加入自動判斷上市櫃) ===
+def analyze_stock_score(ticker_input):
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="1y")
-        # 🛡️ 濾除幽靈空值
+        tid = ticker_input + ".TW" if not ticker_input.endswith((".TW", ".TWO")) else ticker_input
+        df = yf.Ticker(tid).history(period="1y")
         df.dropna(subset=['Close'], inplace=True)
+        
+        # 🛡️ 上櫃自動切換偵測
+        if df.empty and not ticker_input.endswith((".TW", ".TWO")):
+            tid = ticker_input + ".TWO"
+            df = yf.Ticker(tid).history(period="1y")
+            df.dropna(subset=['Close'], inplace=True)
+            
         if df.empty or len(df) < 65: return None
         
         close = df['Close'].iloc[-1]
@@ -89,23 +124,25 @@ def analyze_stock_score(ticker, name):
             stars += 1; tags.append("[創20日新高]")
             
         star_display = "⭐" * stars if stars > 0 else "休息中"
-        tid = ticker.replace('.TW', '').replace('.TWO', '')
+        
+        # 獲取名稱，如果不在預設字典內，就顯示代號
+        clean_tid = tid.replace('.TW', '').replace('.TWO', '')
+        name = STOCKS_DICT.get(tid, clean_tid)
+        
         return {
-            '標的': f"{tid} {name}", '星等': star_display, '收盤': round(close, 2), 
+            '標的': f"{clean_tid} {name}", '星等': star_display, '收盤': round(close, 2), 
             '觸發條件': " + ".join(tags) if tags else "無", '今日量(張)': int(vol_today/1000), '星星數': stars 
         }
     except: return None
 
-# === 4. 持股出場診斷邏輯 (防空值 + 上櫃自動偵測) ===
+# === 5. 持股出場診斷邏輯 ===
 def diagnose_holding(ticker_input):
     try:
-        # 自動判斷是否為上櫃股票
-        tid = ticker_input + ".TW" if "." not in ticker_input else ticker_input
+        tid = ticker_input + ".TW" if not ticker_input.endswith((".TW", ".TWO")) else ticker_input
         df = yf.Ticker(tid).history(period="6mo")
-        df.dropna(subset=['Close'], inplace=True) # 🛡️ 濾除幽靈空值
+        df.dropna(subset=['Close'], inplace=True)
         
-        # 如果上市找不到，自動去上櫃找
-        if df.empty and "." not in ticker_input:
+        if df.empty and not ticker_input.endswith((".TW", ".TWO")):
             tid = ticker_input + ".TWO"
             df = yf.Ticker(tid).history(period="6mo")
             df.dropna(subset=['Close'], inplace=True)
@@ -146,7 +183,7 @@ def diagnose_holding(ticker_input):
         }
     except: return None
 
-# === 5. 成交排行獲取 (新舊格式通吃) ===
+# === 6. 成交排行獲取 ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -191,38 +228,22 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
-# === 6. 112 檔精選名單 ===
-STOCKS = {
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
-    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
-    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
-    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
-    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
-    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
-    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
-    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
-    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
-    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
-    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
-    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
-    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
-    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
-    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
-    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
-    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
-    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
-    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
-    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
-    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
-    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
-    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
-    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
-    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
-}
-
-# === 7. 側邊欄與分頁介面 ===
+# === 7. 側邊欄介面與動態自選股水庫 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ 自選股水庫設定")
+st.sidebar.write("在這裡輸入你想掃描的股票代號，用逗號隔開。系統會自動儲存並針對這些代號進行雷達掃描！")
+
+# 預設名單字串 (將 STOCKS_DICT 轉換成逗號分隔字串)
+default_tickers_str = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
+
+# 讀取使用者輸入的自選股
+user_input_tickers = st.sidebar.text_area("自選股代號庫：", value=default_tickers_str, height=200)
+
+# 解析字串變成清單
+scan_list = [t.strip() for t in user_input_tickers.replace('，', ',').split(',') if t.strip()]
 
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 股神系統：多頭六星飆股雷達")
@@ -231,22 +252,30 @@ if main_page == "🎯 股神六星雷達系統":
 
     with t1:
         st.info("💡 評分條件：均線多頭、月線向上、成交爆量、KD金叉、MACD強勢、創20日高。")
+        
+        st.write(f"當前雷達水庫：共 **{len(scan_list)}** 檔標的")
+        
         if st.button("🚀 啟動六星雷達掃描", use_container_width=True):
             start_t = time.time()
             res, prc = [], 0
             pb, txt = st.progress(0), st.empty()
+            
             with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
+                # 改為掃描側邊欄動態輸入的 scan_list
+                futs = [ex.submit(analyze_stock_score, t) for t in scan_list]
                 for f in as_completed(futs):
                     prc += 1
-                    pb.progress(prc / len(STOCKS))
-                    txt.text(f"🔄 掃描引擎運轉中: {prc}/{len(STOCKS)} ...")
+                    pb.progress(prc / len(scan_list))
+                    txt.text(f"🔄 掃描引擎運轉中: {prc}/{len(scan_list)} ...")
                     if f.result(): res.append(f.result())
+                    
             pb.empty(); txt.empty()
             st.success(f"✅ 掃描完成！耗時 {round(time.time() - start_t, 1)} 秒。")
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
                 st.session_state['df_radar'] = df.drop(columns=['星星數'])
+            else:
+                st.warning("目前水庫中的股票，沒有符合大成交量的強勢標的。")
         
         if 'df_radar' in st.session_state:
             st.dataframe(st.session_state['df_radar'], use_container_width=True)
@@ -280,19 +309,17 @@ if main_page == "🎯 股神六星雷達系統":
         with col_input:
             sid = st.text_input("🔍 輸入股票代號 (直接輸入代號即可)", value="2330", key="chart_input")
         with col_btn:
-            st.write("") # 為了排版對齊
+            st.write("") 
             st.write("")
             chart_submitted = st.button("📈 繪製 K 線圖", use_container_width=True)
 
-        # 加入按鈕控制，點擊按鈕後才執行繪圖
         if chart_submitted and sid:
             with st.spinner("讀取圖表中..."):
                 tid = sid + ".TW" if "." not in sid else sid
                 try:
                     df = yf.Ticker(tid).history(period="1y")
-                    df.dropna(subset=['Close'], inplace=True) # 🛡️ 濾除空值
+                    df.dropna(subset=['Close'], inplace=True) 
                     
-                    # 上櫃自動切換
                     if df.empty and "." not in sid:
                         tid = sid + ".TWO"
                         df = yf.Ticker(tid).history(period="1y")
@@ -318,11 +345,10 @@ if main_page == "🎯 股神六星雷達系統":
         with col_diag_input:
             diag_sid = st.text_input("🔍 輸入持股代號 (直接輸入代號即可)", value="2330", key="diag_input")
         with col_diag_btn:
-            st.write("") # 為了排版對齊
+            st.write("") 
             st.write("")
             diag_submitted = st.button("🛡️ 執行診斷", use_container_width=True)
         
-        # 加入按鈕控制，點擊按鈕後才執行診斷
         if diag_submitted and diag_sid:
             with st.spinner('機密診斷中...'):
                 result = diagnose_holding(diag_sid)

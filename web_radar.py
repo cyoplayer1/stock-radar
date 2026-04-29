@@ -63,7 +63,7 @@ def analyze_stock_score(ticker, name):
         return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
     except: return None
 
-# === 3. 成交排行獲取 (整合動態修正) ===
+# === 3. 成交排行獲取 (新舊格式通吃最強版) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -71,23 +71,48 @@ def get_rank(m_type):
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data, fields = None, None
+            
+            # 先試新版格式
             if 'tables' in res:
                 for table in res['tables']:
                     if 'fields' in table and '證券代號' in table['fields'] and '成交金額' in table['fields']:
-                        fields, stock_data = table['fields'], table['data']
+                        fields = table['fields']
+                        stock_data = table['data']
                         break
+            
+            # 如果新版抓不到，啟用舊版備用邏輯
+            if not stock_data:
+                for key, val in res.items():
+                    if key.startswith('fields') and isinstance(val, list):
+                        if '證券代號' in val and '成交金額' in val:
+                            data_key = key.replace('fields', 'data')
+                            if data_key in res:
+                                fields = val
+                                stock_data = res[data_key]
+                                break
+                                
             if not stock_data: return None
             df = pd.DataFrame(stock_data, columns=fields)
             df = df[['證券代號', '證券名稱', '成交金額']]
+            
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
-            stock_data = res.get('aaData', [])
+            stock_data = []
+            
+            # 上櫃新舊版格式通吃
+            if 'aaData' in res and res['aaData']:
+                stock_data = res['aaData']
+            elif 'tables' in res:
+                for table in res['tables']:
+                    if 'data' in table and len(table['data']) > 0 and len(table['data'][0]) > 5:
+                        stock_data = table['data']
+                        break
+                        
             if not stock_data: return None
             df = pd.DataFrame(stock_data)
-            df_n = df.apply(pd.to_numeric, errors='coerce').fillna(0)
-            v_col = df_n.sum().idxmax()
-            df = df[[0, 1, v_col]]
+            col_val = 9 if df.shape[1] >= 10 else df.shape[1] - 2
+            df = df[[0, 1, col_val]]
             df.columns = ['證券代號', '證券名稱', '成交金額']
     
         df['值'] = pd.to_numeric(df['成交金額'].astype(str).str.replace(',',''), errors='coerce').fillna(0)
@@ -131,7 +156,6 @@ main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神雷達整合系統", "
 if main_page == "🎯 股神雷達整合系統":
     st.title("📡 股神系統旗艦整合版")
     
-    # 這裡已經把 波段掃描、量能監控、全台股低檔快篩 移除了
     t1, t2, t3 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤"])
 
     with t1:
@@ -140,74 +164,4 @@ if main_page == "🎯 股神雷達整合系統":
             res, prc = [], 0
             pb, txt = st.progress(0), st.empty()
             with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
-                for f in as_completed(futs):
-                    prc += 1
-                    pb.progress(prc / len(STOCKS))
-                    txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
-                    if f.result(): res.append(f.result())
-            pb.empty(); txt.empty()
-            st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
-            if res:
-                df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
-                st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
-        if 'df_radar' in st.session_state:
-            st.dataframe(st.session_state['df_radar'], use_container_width=True)
-
-    with t2:
-        if st.button("🔄 刷新即時排行"): st.cache_data.clear()
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("📈 上市排行 (TWSE)")
-            df1 = get_rank("TWSE")
-            if df1 is not None:
-                df1_disp = df1.head(15).copy()
-                df1_disp['金額'] = df1_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-                st.table(df1_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
-        with c2:
-            st.subheader("📉 上櫃排行 (TPEx)")
-            df2 = get_rank("TPEx")
-            if df2 is not None:
-                df2_disp = df2.head(15).copy()
-                df2_disp['金額'] = df2_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-                st.table(df2_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
-
-    with t3:
-        sid = st.text_input("🔍 代號 (如 2330)", value="2330")
-        if sid:
-            tid = sid + ".TW" if "." not in sid else sid
-            try:
-                d = yf.Ticker(tid).history(period="1y")
-                if not d.empty:
-                    d = calculate_kd(d)
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-                    fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-                    fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-                    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-                    st.plotly_chart(fig, use_container_width=True)
-            except: st.error("查無資料")
-
-# --- 頁面 2: 專業排行 (源自成交值排行15名.py) ---
-else:
-    st.title("💰 專業成交值排行榜 TOP 15")
-    st.info("💡 資料來源：證交所與櫃買中心 API")
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        st.header("🏢 上市成交 TOP 15")
-        df_a = get_rank("TWSE")
-        if df_a is not None:
-            df_a_15 = df_a.head(15).copy()
-            df_a_15['成交金額(元)'] = df_a_15['值'].apply(lambda x: f"{int(x):,}")
-            df_a_15.index = range(1, 16)
-            st.dataframe(df_a_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
-
-    with col_b:
-        st.header("🏪 上櫃成交 TOP 15")
-        df_b = get_rank("TPEx")
-        if df_b is not None:
-            df_b_15 = df_b.head(15).copy()
-            df_b_15['成交金額(元)'] = df_b_15['值'].apply(lambda x: f"{int(x):,}")
-            df_b_15.index = range(1, 16)
-            st.dataframe(df_b_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
+                futs = [ex.

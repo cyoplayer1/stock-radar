@@ -36,7 +36,6 @@ def calculate_kd(df):
     return df
 
 def calculate_macd(df):
-    # 計算 MACD 柱狀體
     exp1 = df['Close'].ewm(span=12, adjust=False).mean()
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
@@ -58,67 +57,86 @@ def analyze_stock_score(ticker, name):
         # 濾網：剔除流動性太差的股票 (5日均量小於1000張)
         if vol_5d < 1000000: return None
         
-        # 計算均線
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         
-        # 載入 KD 與 MACD
         df = calculate_kd(df)
         df = calculate_macd(df)
         
         stars = 0
         tags = []
         
-        # ⭐ 條件 1: 均線多頭排列
         if close > df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1]:
-            stars += 1
-            tags.append("[均線多頭]")
-            
-        # ⭐ 條件 2: 月線斜率向上
+            stars += 1; tags.append("[均線多頭]")
         if df['MA20'].iloc[-1] > df['MA20'].iloc[-2]:
-            stars += 1
-            tags.append("[月線向上]")
-            
-        # ⭐ 條件 3: 成交爆量 (大於5日均量1.5倍)
+            stars += 1; tags.append("[月線向上]")
         if vol_today > vol_5d * 1.5:
-            stars += 1
-            tags.append("[爆量攻擊]")
+            stars += 1; tags.append("[爆量攻擊]")
             
-        # ⭐ 條件 4: KD 黃金交叉
         dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
         dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
         if (dk > dd) and (dyk <= dyd):
-            stars += 1
-            tags.append("[KD金叉]")
+            stars += 1; tags.append("[KD金叉]")
             
-        # ⭐ 條件 5: MACD 動能轉強 (柱狀體大於0且比昨天長)
         hist, hist_y = df['Hist'].iloc[-1], df['Hist'].iloc[-2]
         if hist > 0 and hist > hist_y:
-            stars += 1
-            tags.append("[MACD強勢]")
+            stars += 1; tags.append("[MACD強勢]")
             
-        # ⭐ 條件 6: 突破 20 日前高
         high_20 = df['High'].iloc[-21:-1].max()
         if close > high_20:
-            stars += 1
-            tags.append("[創20日新高]")
+            stars += 1; tags.append("[創20日新高]")
             
-        # 轉換星等顯示
         star_display = "⭐" * stars if stars > 0 else "休息中"
-        
         tid = ticker.replace('.TW', '').replace('.TWO', '')
         return {
-            '標的': f"{tid} {name}", 
-            '星等': star_display, 
-            '收盤': round(close, 2), 
-            '觸發條件': " + ".join(tags) if tags else "無", 
-            '今日量(張)': int(vol_today/1000),
-            '星星數': stars # 隱藏欄位，用來排序
+            '標的': f"{tid} {name}", '星等': star_display, '收盤': round(close, 2), 
+            '觸發條件': " + ".join(tags) if tags else "無", '今日量(張)': int(vol_today/1000), '星星數': stars 
         }
     except: return None
 
-# === 4. 成交排行獲取 (新舊格式通吃) ===
+# === 4. 持股出場診斷邏輯 ===
+def diagnose_holding(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="6mo")
+        if df.empty or len(df) < 30: return None
+
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df = calculate_kd(df)
+
+        close = df['Close'].iloc[-1]
+        ma5 = df['MA5'].iloc[-1]
+        ma20 = df['MA20'].iloc[-1]
+        k, d = df['K'].iloc[-1], df['D'].iloc[-1]
+        k_y, d_y = df['K'].iloc[-2], df['D'].iloc[-2]
+
+        status = []
+        action = "🟢 續抱 (趨勢健康，繼續鎖定獲利)"
+
+        if close < ma20:
+            status.append("⚠️ 跌破 20 日月線 (波段趨勢轉弱)")
+            action = "🛑 建議停損/停利出場，保留現金"
+        elif close < ma5:
+            status.append("⚠️ 跌破 5 日線 (短線攻擊熄火)")
+            action = "🟡 建議先減碼一半，收回部分資金"
+
+        if k < d and k_y >= d_y and k_y > 70:
+            status.append("⚠️ KD 高檔死亡交叉 (上漲動能衰退)")
+            action = "🟡 建議拔檔減碼，提防主力出貨"
+
+        if not status:
+            status.append("✅ 均線與動能皆維持強勢多頭")
+
+        return {
+            "收盤價": round(close, 2), "5日線": round(ma5, 2), "月線": round(ma20, 2),
+            "KD狀態": f"K: {round(k,1)} / D: {round(d,1)}",
+            "技術面診斷": "、".join(status), "系統建議": action
+        }
+    except: return None
+
+# === 5. 成交排行獲取 (新舊格式通吃) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -163,7 +181,7 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
-# === 5. 112 檔精選名單 ===
+# === 6. 112 檔精選名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -192,14 +210,14 @@ STOCKS = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# === 6. 側邊欄與分頁整合介面 ===
+# === 7. 側邊欄與分頁介面 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
 
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 股神系統：多頭六星飆股雷達")
     
-    t1, t2, t3 = st.tabs(["🎯 六星雷達掃描", "💰 成交排行", "📈 互動看盤"])
+    t1, t2, t3, t4 = st.tabs(["🎯 六星雷達掃描", "💰 成交排行", "📈 互動看盤", "🛡️ 持股出場診斷"])
 
     with t1:
         st.info("💡 評分條件：均線多頭、月線向上、成交爆量、KD金叉、MACD強勢、創20日高。")
@@ -217,9 +235,7 @@ if main_page == "🎯 股神六星雷達系統":
             pb.empty(); txt.empty()
             st.success(f"✅ 掃描完成！耗時 {round(time.time() - start_t, 1)} 秒。")
             if res:
-                # 依照「星星數」遞減排序，星星越多的排越上面
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
-                # 隱藏用來排序的「星星數」欄位，讓畫面更乾淨
                 st.session_state['df_radar'] = df.drop(columns=['星星數'])
         
         if 'df_radar' in st.session_state:
@@ -249,7 +265,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning("⚠️ 暫時抓不到上櫃資料，可能因非交易時段。")
 
     with t3:
-        sid = st.text_input("🔍 代號 (如 2330)", value="2330")
+        sid = st.text_input("🔍 代號 (如 2330)", value="2330", key="chart_input")
         if sid:
             tid = sid + ".TW" if "." not in sid else sid
             try:
@@ -264,13 +280,39 @@ if main_page == "🎯 股神六星雷達系統":
                     st.plotly_chart(fig, use_container_width=True)
             except: st.error("查無資料")
 
+    with t4:
+        st.subheader("🛡️ 智慧出場與持股診斷")
+        st.write("輸入手中的持股代號，系統將幫你檢查目前的均線支撐與動能，判斷是否該獲利了結或停損。")
+        diag_sid = st.text_input("🔍 輸入持股代號 (如 2330)", value="", key="diag_input")
+        
+        if diag_sid:
+            tid = diag_sid + ".TW" if "." not in diag_sid else diag_sid
+            with st.spinner('診斷中...'):
+                result = diagnose_holding(tid)
+                if result:
+                    st.markdown(f"### 🎯 診斷結果")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("收盤價", result['收盤價'])
+                    c2.metric("5日線 (極短線支撐)", result['5日線'])
+                    c3.metric("月線 (波段防守線)", result['月線'])
+                    c4.metric("KD 動能", result['KD狀態'])
+                    
+                    st.warning(f"**技術面狀況：** {result['技術面診斷']}")
+                    
+                    if "續抱" in result['系統建議']:
+                        st.success(f"**行動建議：** {result['系統建議']}")
+                    elif "減碼" in result['系統建議']:
+                        st.info(f"**行動建議：** {result['系統建議']}")
+                    else:
+                        st.error(f"**行動建議：** {result['系統建議']}")
+                else:
+                    st.error("⚠️ 查無此股票資料，請確認代號是否正確。")
+
 else:
     st.title("💰 專業成交值排行榜 TOP 15")
-    st.info("💡 資料來源：證交所與櫃買中心 API")
     if st.button("🔄 刷新資料"): st.cache_data.clear()
     
     col_a, col_b = st.columns(2)
-    
     with col_a:
         st.header("🏢 上市成交 TOP 15")
         df_a = get_rank("TWSE")

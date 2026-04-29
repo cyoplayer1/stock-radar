@@ -16,34 +16,9 @@ st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layo
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
-# 🔑 老盧提供的富果 API 金鑰
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 籌碼引擎：抓取法人買賣超 ===
-@st.cache_data(ttl=3600)
-def get_inst_data():
-    """抓取今日外資投信買賣超合計"""
-    inst_map = {}
-    try:
-        # 上市法人資料
-        u1 = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
-        r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
-        if 'data' in r1:
-            for d in r1['data']:
-                # 合計 = 外資買賣超(d[2]) + 投信買賣超(d[10])
-                inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
-        
-        # 上櫃法人資料
-        u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
-        r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
-        if 'aaData' in r2:
-            for d in r2['aaData']:
-                # 合計 = 外資買賣超(d[8]) + 投信買賣超(d[10])
-                inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
-    except: pass
-    return inst_map
-
-# === 3. 核心指標計算 ===
+# === 2. 核心計算函數 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -78,7 +53,27 @@ def get_fugle_realtime(symbol):
     except: pass
     return None, None
 
-# === 4. 名單字典 ===
+@st.cache_data(ttl=3600)
+def get_inst_data():
+    """抓取今日法人買賣超數據"""
+    inst_map = {}
+    try:
+        # 上市
+        u1 = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
+        r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
+        if 'data' in r1:
+            for d in r1['data']:
+                inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
+        # 上櫃
+        u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
+        r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
+        if 'aaData' in r2:
+            for d in r2['aaData']:
+                inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
+    except: pass
+    return inst_map
+
+# === 3. 名單字典 ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -107,7 +102,7 @@ STOCKS_DICT = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# === 5. 雷達核心邏輯 ===
+# === 4. 雷達掃描邏輯 (視覺強化大戶標籤) ===
 def analyze_stock_score(ticker_in, inst_map):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -137,14 +132,18 @@ def analyze_stock_score(ticker_in, inst_map):
         if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
-        # 💎 籌碼大戶分析 (外資+投信)
+        # 💎 籌碼大戶強化顯示
         inst_val = inst_map.get(clean, 0)
-        if inst_val > 500: tags.append("[大戶進駐]")
+        if inst_val > 500: 
+            tags.append("🔴[大戶進駐]") # 這裡加了紅點，讓你一眼看到「亮點」
+        
         inst_display = f"{inst_val:,}" if inst_val != 0 else "--"
         
-        return {'標的': f"{clean} {STOCKS_DICT.get(tid, clean)}", '星等': "⭐"*s if s>0 else "休息", '收盤': round(c,2), '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': "+".join(tags), '星星數': s}
+        name = STOCKS_DICT.get(tid, clean)
+        return {'標的': f"{clean} {name}", '星等': "⭐"*s if s>0 else "休息", '收盤': round(c,2), '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': " ".join(tags), '星星數': s}
     except: return None
 
+# === 5. 其餘功能 (診斷、排行) ===
 def diagnose_holding(ticker_in):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -167,7 +166,6 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 排行與介面 ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -200,6 +198,7 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
+# === 6. 介面介面 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
 st.sidebar.markdown("---")
@@ -209,17 +208,17 @@ u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
 s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：籌碼主力強化版")
+    st.title("📡 老盧股神系統：籌碼視覺強化版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達掃描", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     
     with t1:
         st.markdown("""
-        ### 🎯 終極買進組合：5星以上 + [爆量攻擊] + [大戶進駐]
-        * **籌碼大戶(張)：** 外資與投信今日買賣超合計。
-        * **大戶進駐標籤：** 當日外資投信合計買超超過 500 張時自動點亮。
+        ### 🎯 高勝率組合：5星以上 + [爆量攻擊] + 🔴[大戶進駐]
+        * **注意表格最後一欄：** 只要法人買超夠多，就會看到 **🔴[大戶進駐]** 跳出來。
+        * **資料時間：** 法人買賣超在下午 16:30 更新，盤中顯示的是前一天的數據。
         ---
         """)
-        if st.button("🚀 啟動即時掃描 (含籌碼大戶分析)", use_container_width=True):
+        if st.button("🚀 啟動即時掃描 (含籌碼分析)", use_container_width=True):
             inst_map = get_inst_data()
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
@@ -229,6 +228,7 @@ if main_page == "🎯 股神六星雷達系統":
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
+                # 重新排序顯示
                 st.dataframe(df[['標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
     
     with t2:
@@ -278,19 +278,3 @@ if main_page == "🎯 股神六星雷達系統":
                 elif "減碼" in r['建議']: st.warning(f"**建議：** {r['建議']}")
                 else: st.error(f"**建議：** {r['建議']}")
             else: st.error("⚠️ 查無資料")
-else:
-    st.title("💰 專業成交排行 TOP 15")
-    if st.button("🔄 刷新資料"): st.cache_data.clear()
-    c_a, c_b = st.columns(2)
-    df_a = get_rank("TWSE")
-    if df_a is not None:
-        c_a.header("🏢 上市熱門")
-        d15 = df_a.head(15).copy()
-        d15['成交金額(元)'] = d15['值'].apply(lambda x: f"{int(x):,}")
-        c_a.dataframe(d15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
-    df_b = get_rank("TPEx")
-    if df_b is not None:
-        c_b.header("🏪 上櫃熱門")
-        d15b = df_b.head(15).copy()
-        d15b['成交金額(元)'] = d15b['值'].apply(lambda x: f"{int(x):,}")
-        c_b.dataframe(d15b[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)

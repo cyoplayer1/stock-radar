@@ -13,7 +13,7 @@ import urllib3
 warnings.filterwarnings("ignore")
 # 🛡️ 這一行很重要：忽略因為跳過 SSL 驗證產生的警告訊息
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -197,7 +197,7 @@ u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
 s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：終極共振版")
+    st.title("📡 稀有的股神系統：終極共振版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     
     with t1:

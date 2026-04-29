@@ -17,7 +17,7 @@ st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layo
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
-# === 2. 核心計算函數 ===
+# === 2. 核心技術指標計算 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -35,35 +35,90 @@ def calculate_kd(df):
     df['K'], df['D'] = k_v, d_v
     return df
 
+def calculate_macd(df):
+    # 計算 MACD 柱狀體
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['Hist'] = df['MACD'] - df['Signal']
+    return df
+
+# === 3. 六星雷達核心邏輯 ===
 def analyze_stock_score(ticker, name):
     try:
         stock = yf.Ticker(ticker)
-        df = stock.history(period="2y")
-        if df.empty or len(df) < 60: return None
+        df = stock.history(period="1y")
+        if df.empty or len(df) < 65: return None
+        
         close = df['Close'].iloc[-1]
-        vol_5d = df['Volume'].tail(5).mean()
+        vol_today = df['Volume'].iloc[-1]
+        vol_5d = df['Volume'].iloc[-6:-1].mean()
+        
+        # 濾網：剔除流動性太差的股票 (5日均量小於1000張)
         if vol_5d < 1000000: return None
         
-        score, tags = 0, []
-        ma20 = df['Close'].rolling(20).mean().iloc[-1]
-        if close > ma20: score += 20; tags.append("[站上月線]")
+        # 計算均線
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
         
-        df = calculate_kd(df.copy())
+        # 載入 KD 與 MACD
+        df = calculate_kd(df)
+        df = calculate_macd(df)
+        
+        stars = 0
+        tags = []
+        
+        # ⭐ 條件 1: 均線多頭排列
+        if close > df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1]:
+            stars += 1
+            tags.append("[均線多頭]")
+            
+        # ⭐ 條件 2: 月線斜率向上
+        if df['MA20'].iloc[-1] > df['MA20'].iloc[-2]:
+            stars += 1
+            tags.append("[月線向上]")
+            
+        # ⭐ 條件 3: 成交爆量 (大於5日均量1.5倍)
+        if vol_today > vol_5d * 1.5:
+            stars += 1
+            tags.append("[爆量攻擊]")
+            
+        # ⭐ 條件 4: KD 黃金交叉
         dk, dd = df['K'].iloc[-1], df['D'].iloc[-1]
         dyk, dyd = df['K'].iloc[-2], df['D'].iloc[-2]
-        if (dk > dd) and (dyk <= dyd): score += 40; tags.append("[日剛金叉]")
-        elif dk > dd: score += 20; tags.append("[日線偏多]")
-        
-        df_w = df.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
-        df_w = calculate_kd(df_w.copy())
-        wk = df_w['K'].iloc[-1]
-        if wk > df_w['D'].iloc[-1]: score += 40; tags.append("[周線偏多]")
+        if (dk > dd) and (dyk <= dyd):
+            stars += 1
+            tags.append("[KD金叉]")
+            
+        # ⭐ 條件 5: MACD 動能轉強 (柱狀體大於0且比昨天長)
+        hist, hist_y = df['Hist'].iloc[-1], df['Hist'].iloc[-2]
+        if hist > 0 and hist > hist_y:
+            stars += 1
+            tags.append("[MACD強勢]")
+            
+        # ⭐ 條件 6: 突破 20 日前高
+        high_20 = df['High'].iloc[-21:-1].max()
+        if close > high_20:
+            stars += 1
+            tags.append("[創20日新高]")
+            
+        # 轉換星等顯示
+        star_display = "⭐" * stars if stars > 0 else "休息中"
         
         tid = ticker.replace('.TW', '').replace('.TWO', '')
-        return {'標的': f"{tid} {name}", '評分': f"{score}分", '收盤': round(close, 2), '狀態': " + ".join(tags) if tags else "休息", '日K': round(dk, 1), '周K': round(wk, 1), '5日均量': int(vol_5d/1000), 'Sort_Score': score}
+        return {
+            '標的': f"{tid} {name}", 
+            '星等': star_display, 
+            '收盤': round(close, 2), 
+            '觸發條件': " + ".join(tags) if tags else "無", 
+            '今日量(張)': int(vol_today/1000),
+            '星星數': stars # 隱藏欄位，用來排序
+        }
     except: return None
 
-# === 3. 成交排行獲取 (新舊格式通吃最強版) ===
+# === 4. 成交排行獲取 (新舊格式通吃) ===
 @st.cache_data(ttl=300)
 def get_rank(m_type):
     try:
@@ -71,36 +126,26 @@ def get_rank(m_type):
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data, fields = None, None
-            
-            # 先試新版格式
             if 'tables' in res:
                 for table in res['tables']:
                     if 'fields' in table and '證券代號' in table['fields'] and '成交金額' in table['fields']:
-                        fields = table['fields']
-                        stock_data = table['data']
+                        fields, stock_data = table['fields'], table['data']
                         break
-            
-            # 如果新版抓不到，啟用舊版備用邏輯
             if not stock_data:
                 for key, val in res.items():
                     if key.startswith('fields') and isinstance(val, list):
                         if '證券代號' in val and '成交金額' in val:
                             data_key = key.replace('fields', 'data')
                             if data_key in res:
-                                fields = val
-                                stock_data = res[data_key]
+                                fields, stock_data = val, res[data_key]
                                 break
-                                
             if not stock_data: return None
             df = pd.DataFrame(stock_data, columns=fields)
             df = df[['證券代號', '證券名稱', '成交金額']]
-            
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
             res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data = []
-            
-            # 上櫃新舊版格式通吃
             if 'aaData' in res and res['aaData']:
                 stock_data = res['aaData']
             elif 'tables' in res:
@@ -108,7 +153,6 @@ def get_rank(m_type):
                     if 'data' in table and len(table['data']) > 0 and len(table['data'][0]) > 5:
                         stock_data = table['data']
                         break
-                        
             if not stock_data: return None
             df = pd.DataFrame(stock_data)
             col_val = 9 if df.shape[1] >= 10 else df.shape[1] - 2
@@ -119,7 +163,7 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
-# === 4. 112 檔精選名單 ===
+# === 5. 112 檔精選名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -148,18 +192,18 @@ STOCKS = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# === 5. 側邊欄與分頁整合介面 ===
+# === 6. 側邊欄與分頁整合介面 ===
 st.sidebar.title("📡 導覽選單")
-main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神雷達整合系統", "💰 專業成交排行 (15名)"])
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
 
-# --- 頁面 1: 整合系統 ---
-if main_page == "🎯 股神雷達整合系統":
-    st.title("📡 股神系統旗艦整合版")
+if main_page == "🎯 股神六星雷達系統":
+    st.title("📡 股神系統：多頭六星飆股雷達")
     
-    t1, t2, t3 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤"])
+    t1, t2, t3 = st.tabs(["🎯 六星雷達掃描", "💰 成交排行", "📈 互動看盤"])
 
     with t1:
-        if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
+        st.info("💡 評分條件：均線多頭、月線向上、成交爆量、KD金叉、MACD強勢、創20日高。")
+        if st.button("🚀 啟動六星雷達掃描", use_container_width=True):
             start_t = time.time()
             res, prc = [], 0
             pb, txt = st.progress(0), st.empty()
@@ -168,13 +212,16 @@ if main_page == "🎯 股神雷達整合系統":
                 for f in as_completed(futs):
                     prc += 1
                     pb.progress(prc / len(STOCKS))
-                    txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
+                    txt.text(f"🔄 掃描引擎運轉中: {prc}/{len(STOCKS)} ...")
                     if f.result(): res.append(f.result())
             pb.empty(); txt.empty()
-            st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
+            st.success(f"✅ 掃描完成！耗時 {round(time.time() - start_t, 1)} 秒。")
             if res:
-                df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
-                st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
+                # 依照「星星數」遞減排序，星星越多的排越上面
+                df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
+                # 隱藏用來排序的「星星數」欄位，讓畫面更乾淨
+                st.session_state['df_radar'] = df.drop(columns=['星星數'])
+        
         if 'df_radar' in st.session_state:
             st.dataframe(st.session_state['df_radar'], use_container_width=True)
 
@@ -189,7 +236,7 @@ if main_page == "🎯 股神雷達整合系統":
                 df1_disp['金額'] = df1_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
                 st.table(df1_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
             else:
-                st.warning("⚠️ 暫時抓不到上市資料，可能是證交所伺服器維護中。")
+                st.warning("⚠️ 暫時抓不到上市資料，可能因非交易時段。")
                 
         with c2:
             st.subheader("📉 上櫃排行 (TPEx)")
@@ -199,7 +246,7 @@ if main_page == "🎯 股神雷達整合系統":
                 df2_disp['金額'] = df2_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
                 st.table(df2_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
             else:
-                st.warning("⚠️ 暫時抓不到上櫃資料，可能是櫃買中心伺服器維護中。")
+                st.warning("⚠️ 暫時抓不到上櫃資料，可能因非交易時段。")
 
     with t3:
         sid = st.text_input("🔍 代號 (如 2330)", value="2330")
@@ -217,7 +264,6 @@ if main_page == "🎯 股神雷達整合系統":
                     st.plotly_chart(fig, use_container_width=True)
             except: st.error("查無資料")
 
-# --- 頁面 2: 專業排行 (源自成交值排行15名.py) ---
 else:
     st.title("💰 專業成交值排行榜 TOP 15")
     st.info("💡 資料來源：證交所與櫃買中心 API")
@@ -234,7 +280,7 @@ else:
             df_a_15.index = range(1, 16)
             st.dataframe(df_a_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
         else:
-            st.error("⚠️ 無法讀取上市資料，可能因非交易時段或 API 變更。")
+            st.error("⚠️ 無法讀取上市資料，可能因非交易時段。")
 
     with col_b:
         st.header("🏪 上櫃成交 TOP 15")
@@ -245,4 +291,4 @@ else:
             df_b_15.index = range(1, 16)
             st.dataframe(df_b_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
         else:
-            st.error("⚠️ 無法讀取上櫃資料，可能因非交易時段或 API 變更。")
+            st.error("⚠️ 無法讀取上櫃資料，可能因非交易時段。")

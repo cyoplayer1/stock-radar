@@ -183,7 +183,7 @@ u_in = st.sidebar.text_area("代號庫：", value=def_t, height=200)
 s_list = [t.strip() for t in u_in.replace('，',',').split(',') if t.strip()]
 
 if main_p == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：終極即時版")
+    st.title("📡 稀有的股神系統：終極即時版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     with t1:
         if st.button("🚀 啟動掃描", use_container_width=True):

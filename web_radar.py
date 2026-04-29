@@ -16,10 +16,9 @@ st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layo
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
-# 🔑 富果 API 金鑰
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 核心技術指標計算 ===
+# === 2. 核心計算 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -54,7 +53,7 @@ def get_fugle_realtime(symbol):
     except: pass
     return None, None
 
-# === 3. 核心邏輯與名單 ===
+# === 3. 112 檔完整名單字典 (已修正 SyntaxError) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -63,7 +62,7 @@ STOCKS_DICT = {
     "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
     "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
-    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.軟體健策",
+    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
     "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
     "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
     "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
@@ -227,7 +226,7 @@ if main_page == "🎯 股神六星雷達系統":
                     fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
                     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig, use_container_width=True)
-                else: st.error("查無資料")
+                else: st.error("⚠️ 查無資料")
 
     with t4:
         st.subheader("🛡️ 持股即時診斷")
@@ -248,7 +247,7 @@ if main_page == "🎯 股神六星雷達系統":
 
 else:
     st.title("💰 專業成交排行 TOP 15")
-    if st.button("🔄 刷新排行"): st.cache_data.clear()
+    if st.button("🔄 刷新資料"): st.cache_data.clear()
     c_a, c_b = st.columns(2)
     df_a = get_rank("TWSE")
     if df_a is not None:

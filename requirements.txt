@@ -1,5 +1,6 @@
 streamlit
-pandas
-requests
 yfinance
+pandas
 plotly
+requests
+urllib3

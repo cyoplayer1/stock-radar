@@ -11,6 +11,7 @@ import urllib3
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
+# 🛡️ 這一行很重要：忽略因為跳過 SSL 驗證產生的警告訊息
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layout="wide")
 
@@ -46,7 +47,8 @@ def calculate_macd(df):
 def get_fugle_realtime(symbol):
     try:
         url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
-        res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=5)
+        # 🛡️ 加上 verify=False
+        res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=5, verify=False)
         if res.status_code == 200:
             data = res.json()
             return data.get('closePrice'), data.get('total', {}).get('tradeVolume', 0)
@@ -57,12 +59,13 @@ def get_fugle_realtime(symbol):
 def get_inst_data():
     inst_map = {}
     try:
+        # 🛡️ 所有政府網站連線都加上 verify=False
         u1 = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
-        r1 = requests.get(u1, headers=HEADERS, timeout=10).json()
+        r1 = requests.get(u1, headers=HEADERS, timeout=10, verify=False).json()
         if 'data' in r1:
             for d in r1['data']: inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
         u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
-        r2 = requests.get(u2, headers=HEADERS, timeout=10).json()
+        r2 = requests.get(u2, headers=HEADERS, timeout=10, verify=False).json()
         if 'aaData' in r2:
             for d in r2['aaData']: inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
     except: pass
@@ -70,23 +73,19 @@ def get_inst_data():
 
 @st.cache_data(ttl=300)
 def get_hot_rank_ids():
-    """獲取上市上櫃成交量前 15 名的代號清單"""
     hot_ids = set()
     try:
-        # 上市
         u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-        res1 = requests.get(u1, headers=HEADERS, timeout=10).json()
+        res1 = requests.get(u1, headers=HEADERS, timeout=10, verify=False).json()
         if 'tables' in res1:
             for t in res1['tables']:
                 if '證券代號' in t.get('fields', []):
-                    # 依成交金額排序並取前 15
                     df_tmp = pd.DataFrame(t['data'], columns=t['fields'])
                     df_tmp['val'] = pd.to_numeric(df_tmp['成交金額'].str.replace(',',''), errors='coerce')
                     hot_ids.update(df_tmp.sort_values('val', ascending=False).head(15)['證券代號'].tolist())
                     break
-        # 上櫃
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-        res2 = requests.get(u2, headers=HEADERS, timeout=10).json()
+        res2 = requests.get(u2, headers=HEADERS, timeout=10, verify=False).json()
         data_otc = res2.get('aaData', []) or (res2.get('tables', [{}])[0].get('data', []) if 'tables' in res2 else [])
         if data_otc:
             df_otc = pd.DataFrame(data_otc)
@@ -125,7 +124,7 @@ STOCKS_DICT = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# === 4. 雷達掃描邏輯 (排行共振標示) ===
+# === 4. 雷達掃描邏輯 ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -156,9 +155,7 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
         # 💎 排行榜共振標記
-        if clean in hot_list:
-            tags.append("🔥[排行熱門]")
-        
+        if clean in hot_list: tags.append("🔥[排行熱門]")
         # 💎 籌碼大戶標記
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
@@ -200,19 +197,20 @@ u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
 s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：熱度共振版")
+    st.title("📡 老盧股神系統：終極共振版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     
     with t1:
         st.markdown("""
-        ### 🎯 終極共振：5星以上 + 🔥[排行熱門] + 🔴[大戶進駐]
-        * **🔥[排行熱門]：** 該股目前位居市場成交值前 15 名。
-        * **加分題：** 有星號、有排行熱度、又有大戶籌碼，這就是盤面上最強標的！
+        ### 🎯 買進策略：共振發動
+        * **核心指標：** 5顆星以上股票。
+        * **黃金組合：** 同時出現 **[KD金叉]**、**[爆量攻擊]**、**🔥[排行熱門]** 與 **🔴[大戶進駐]**。
+        * **三不買：** 沒量不買、月線向下不買、星星掉隊不買。
         ---
         """)
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids() # 這裡預先抓排行代號
+            hot_list = get_hot_rank_ids()
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
@@ -223,15 +221,20 @@ if main_page == "🎯 股神六星雷達系統":
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
                 st.dataframe(df[['標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
 
-    # (排行、看盤、診斷內容保持完整，確保系統穩定)
     with t2:
+        st.markdown("""
+        ### 💰 量能先行：主力足跡
+        * **前 15 名：** 這裡是當前盤面上資金最滾燙的地方。
+        * **連動參考：** 如果雷達星星也出現在這張清單，代表「熱點共振」。
+        ---
+        """)
         if st.button("🔄 刷新排行"): st.cache_data.clear()
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("📈 上市排行")
-            # 這裡我們直接用剛剛寫好的邏輯獲取詳細排行
             url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            # 🛡️ 加強驗證跳過
+            res = requests.get(url, headers=HEADERS, timeout=10, verify=False).json()
             if 'tables' in res:
                 for table in res['tables']:
                     if '證券代號' in table.get('fields', []):
@@ -244,7 +247,8 @@ if main_page == "🎯 股神六星雷達系統":
         with c2:
             st.subheader("📉 上櫃排行")
             url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            # 🛡️ 加強驗證跳過
+            res = requests.get(url, headers=HEADERS, timeout=10, verify=False).json()
             data_otc = res.get('aaData', []) or (res.get('tables', [{}])[0].get('data', []) if 'tables' in res else [])
             if data_otc:
                 df2 = pd.DataFrame(data_otc)
@@ -252,10 +256,15 @@ if main_page == "🎯 股神六星雷達系統":
                 df2['值'] = pd.to_numeric(df2[cv].astype(str).str.replace(',',''), errors='coerce')
                 d15b = df2.sort_values('值', ascending=False).head(15).copy()
                 d15b['金額'] = d15b['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-                d15b.columns = ['證券代號','證券名稱','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12','c13','c14','c15','c16','值','金額']
-                st.table(d15b[['證券代號','證券名稱','金額']].reset_index(drop=True))
+                st.table(d15b[[0, 1, '金額']].rename(columns={0:'證券代號', 1:'證券名稱'}).reset_index(drop=True))
 
     with t3:
+        st.markdown("""
+        ### 📈 互動圖表：型態確認
+        * **看均線：** 股價是否「帶量」穿過三條均線？
+        * **看位置：** 買在突破盤整區的第一根 K 線，勝率最高。
+        ---
+        """)
         sid = st.text_input("🔍 代號", value="2330", key="chart_in")
         if st.button("📈 繪圖", use_container_width=True):
             tid = sid + ".TW" if "." not in sid else sid
@@ -270,13 +279,20 @@ if main_page == "🎯 股神六星雷達系統":
                 st.plotly_chart(fig, use_container_width=True)
 
     with t4:
+        st.markdown("""
+        ### 🛡️ 診斷儀表板：賣出紀律
+        * **停損底線：** 跌破 20 日月線 = 趨勢毀掉，無條件離場。
+        * **短線減碼：** 股價離 5 日線太遠或 KD 高檔死叉時，先獲利了結。
+        ---
+        """)
         d_id = st.text_input("🔍 診斷代號", value="2330", key="diag_in")
         if st.button("🛡️ 執行診斷", use_container_width=True):
             r = diagnose_holding(d_id)
             if r:
-                st.markdown(f"### 🎯 {r['標多']} 戰情室")
+                st.markdown(f"### 🎯 {r['標的']} 戰情室")
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("即時價", r['收盤']); c2.metric("5日線", r['MA5'])
                 c3.metric("月線", r['MA20']); c4.metric("KD狀態", r['KD'])
                 st.warning(f"**狀況：** {r['狀況']}")
-                st.success(f"**建議：** {r['建議']}") if "續抱" in r['建議'] else st.error(f"**建議：** {r['建議']}")
+                if "續抱" in r['建議']: st.success(f"**建議：** {r['建議']}")
+                else: st.error(f"**建議：** {r['建議']}")

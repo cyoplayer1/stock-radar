@@ -16,9 +16,10 @@ st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layo
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
+# 🔑 老盧提供的富果 API 金鑰
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 核心計算函數 ===
+# === 2. 核心技術指標函數 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -43,6 +44,7 @@ def calculate_macd(df):
     df['Hist'] = df['MACD'] - df['Signal']
     return df
 
+# === 3. API 數據引擎 ===
 def get_fugle_realtime(symbol):
     try:
         url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
@@ -55,7 +57,7 @@ def get_fugle_realtime(symbol):
 
 @st.cache_data(ttl=3600)
 def get_inst_data():
-    """抓取今日法人買賣超數據"""
+    """抓取今日法人買賣超數據 (外資+投信)"""
     inst_map = {}
     try:
         # 上市
@@ -73,7 +75,7 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 3. 名單字典 ===
+# === 4. 名單字典 (112 檔精選) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -102,7 +104,7 @@ STOCKS_DICT = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# === 4. 雷達掃描邏輯 (視覺強化大戶標籤) ===
+# === 5. 核心邏輯函數 ===
 def analyze_stock_score(ticker_in, inst_map):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -132,18 +134,14 @@ def analyze_stock_score(ticker_in, inst_map):
         if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
-        # 💎 籌碼大戶強化顯示
         inst_val = inst_map.get(clean, 0)
-        if inst_val > 500: 
-            tags.append("🔴[大戶進駐]") # 這裡加了紅點，讓你一眼看到「亮點」
-        
+        if inst_val > 500: tags.append("🔴[大戶進駐]")
         inst_display = f"{inst_val:,}" if inst_val != 0 else "--"
         
         name = STOCKS_DICT.get(tid, clean)
         return {'標的': f"{clean} {name}", '星等': "⭐"*s if s>0 else "休息", '收盤': round(c,2), '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': " ".join(tags), '星星數': s}
     except: return None
 
-# === 5. 其餘功能 (診斷、排行) ===
 def diagnose_holding(ticker_in):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -171,7 +169,7 @@ def get_rank(m_type):
     try:
         if m_type == "TWSE":
             u = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-            res = requests.get(u, headers=HEADERS, timeout=10).json()
+            res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data, fields = None, None
             if 'tables' in res:
                 for table in res['tables']:
@@ -183,7 +181,7 @@ def get_rank(m_type):
             df = df[['證券代號', '證券名稱', '成交金額']]
         else:
             u = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-            res = requests.get(u, headers=HEADERS, timeout=10).json()
+            res = requests.get(u, headers=HEADERS, verify=False, timeout=10).json()
             stock_data = res.get('aaData', [])
             if not stock_data and 'tables' in res:
                 for table in res['tables']:
@@ -198,7 +196,7 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
-# === 6. 介面介面 ===
+# === 6. 介面與導覽 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
 st.sidebar.markdown("---")
@@ -208,30 +206,38 @@ u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
 s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：籌碼視覺強化版")
-    t1, t2, t3, t4 = st.tabs(["🎯 六星雷達掃描", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
+    st.title("📡 老盧股神系統：終極即時版")
+    t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     
     with t1:
+        # --- 註記回歸 ---
         st.markdown("""
-        ### 🎯 高勝率組合：5星以上 + [爆量攻擊] + 🔴[大戶進駐]
-        * **注意表格最後一欄：** 只要法人買超夠多，就會看到 **🔴[大戶進駐]** 跳出來。
-        * **資料時間：** 法人買賣超在下午 16:30 更新，盤中顯示的是前一天的數據。
+        ### 🎯 買進策略：共振發動
+        * **核心指標：** 5顆星以上股票。
+        * **黃金組合：** 同時出現 **[KD金叉]**、**[爆量攻擊]** 與 **🔴[大戶進駐]**。
+        * **三不買：** 沒量不買、月線向下不買、星星掉隊不買。
         ---
         """)
         if st.button("🚀 啟動即時掃描 (含籌碼分析)", use_container_width=True):
-            inst_map = get_inst_data()
+            inst_data = get_inst_data()
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, inst_map) for t in s_list]
+                futs = [ex.submit(analyze_stock_score, t, inst_data) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
-                # 重新排序顯示
                 st.dataframe(df[['標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
     
     with t2:
+        # --- 註記回歸 ---
+        st.markdown("""
+        ### 💰 量能先行：主力足跡
+        * **前 15 名：** 這裡是市場上錢砸得最多的地方。
+        * **大戶指標：** 如果雷達星星出現在這裡，代表大戶正在「用錢買趨勢」。
+        ---
+        """)
         if st.button("🔄 刷新排行"): st.cache_data.clear()
         c1, c2 = st.columns(2)
         with c1:
@@ -250,8 +256,15 @@ if main_page == "🎯 股神六星雷達系統":
                 st.table(d15b[['證券代號','證券名稱','金額']].reset_index(drop=True))
 
     with t3:
+        # --- 註記回歸 ---
+        st.markdown("""
+        ### 📈 互動圖表：型態確認
+        * **看均線：** 股價必須站穩三條均線，且趨勢向上。
+        * **看位置：** 買在突破盤整區的第一根 K 線，勝率最高。
+        ---
+        """)
         sid = st.text_input("🔍 代號", value="2330", key="chart_in")
-        if st.button("📈 繪圖", use_container_width=True):
+        if st.button("📈 繪製圖表", use_container_width=True):
             tid = sid + ".TW" if "." not in sid else sid
             df = yf.Ticker(tid).history(period="1y")
             df.dropna(subset=['Close'], inplace=True)
@@ -265,6 +278,13 @@ if main_page == "🎯 股神六星雷達系統":
                 st.plotly_chart(fig, use_container_width=True)
 
     with t4:
+        # --- 註記回歸 ---
+        st.markdown("""
+        ### 🛡️ 診斷儀表板：賣出紀律
+        * **停損底線：** 跌破 20 日月線 = 趨勢毀掉，無條件離場。
+        * **短線減碼：** 股價離 5 日線太遠或 KD 高檔死叉時，先獲利了結。
+        ---
+        """)
         d_id = st.text_input("🔍 診斷代號", value="2330", key="diag_in")
         if st.button("🛡️ 執行診斷", use_container_width=True):
             r = diagnose_holding(d_id)
@@ -278,3 +298,20 @@ if main_page == "🎯 股神六星雷達系統":
                 elif "減碼" in r['建議']: st.warning(f"**建議：** {r['建議']}")
                 else: st.error(f"**建議：** {r['建議']}")
             else: st.error("⚠️ 查無資料")
+
+else:
+    st.title("💰 專業成交排行 TOP 15")
+    if st.button("🔄 刷新資料"): st.cache_data.clear()
+    c_a, c_b = st.columns(2)
+    df_a = get_rank("TWSE")
+    if df_a is not None:
+        c_a.header("🏢 上市熱門")
+        d15 = df_a.head(15).copy()
+        d15['成交金額(元)'] = d15['值'].apply(lambda x: f"{int(x):,}")
+        c_a.dataframe(d15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
+    df_b = get_rank("TPEx")
+    if df_b is not None:
+        c_b.header("🏪 上櫃熱門")
+        d15b = df_b.head(15).copy()
+        d15b['成交金額(元)'] = d15b['值'].apply(lambda x: f"{int(x):,}")
+        c_b.dataframe(d15b[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)

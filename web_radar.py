@@ -94,23 +94,7 @@ def get_rank(m_type):
         return df.sort_values('值', ascending=False)
     except: return None
 
-# === 4. 全台股低檔快篩核心邏輯 ===
-def check_low_breakout(ticker, name):
-    try:
-        df = yf.Ticker(ticker).history(period="6mo")
-        if df.empty or len(df) < 40: return None
-        v_now = df['Volume'].iloc[-1]
-        v_avg = df['Volume'].iloc[-6:-1].mean()
-        if v_now < v_avg * 1.8: return None
-        low_p, high_p = df['Low'].min(), df['High'].max()
-        curr_p = df['Close'].iloc[-1]
-        pos = (curr_p - low_p) / (high_p - low_p) if high_p != low_p else 1
-        if pos < 0.25:
-            return {'代號名稱': f"{ticker.split('.')[0]} {name}", '收盤價': round(curr_p, 2), '量能倍數': round(v_now/v_avg, 2), '低檔位置': f"{round(pos*100, 1)}%", '今日張數': int(v_now/1000)}
-    except: return None
-    return None
-
-# 112 檔精選名單
+# === 4. 112 檔精選名單 ===
 STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -146,7 +130,9 @@ main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神雷達整合系統", "
 # --- 頁面 1: 整合系統 ---
 if main_page == "🎯 股神雷達整合系統":
     st.title("📡 股神系統旗艦整合版")
-    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
+    
+    # 這裡已經把 波段掃描、量能監控、全台股低檔快篩 移除了
+    t1, t2, t3 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤"])
 
     with t1:
         if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
@@ -201,25 +187,6 @@ if main_page == "🎯 股神雷達整合系統":
                     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                     st.plotly_chart(fig, use_container_width=True)
             except: st.error("查無資料")
-
-    with t6:
-        st.subheader("🔍 全台股：低檔爆量強勢股偵測")
-        if st.button("🚀 開始全市場大掃描", use_container_width=True):
-            with st.spinner("大掃描進行中..."):
-                pool = []
-                d1, d2 = get_rank("TWSE"), get_rank("TPEx")
-                if d1 is not None:
-                    for _, r in d1.head(150).iterrows(): pool.append((r['證券代號'] + ".TW", r['證券名稱']))
-                if d2 is not None:
-                    for _, r in d2.head(100).iterrows(): pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
-                results = []
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
-                    for f in as_completed(f_to_s):
-                        if f.result(): results.append(f.result())
-                if results:
-                    st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
-                else: st.warning("目前無符合條件標的。")
 
 # --- 頁面 2: 專業排行 (源自成交值排行15名.py) ---
 else:

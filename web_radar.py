@@ -132,4 +132,115 @@ STOCKS = {
     "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
     "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
     "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
-    "2883.TW": "開發金", "28
+    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
+    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
+    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
+    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
+    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
+}
+
+# === 5. 側邊欄與分頁整合介面 ===
+st.sidebar.title("📡 導覽選單")
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神雷達整合系統", "💰 專業成交排行 (15名)"])
+
+# --- 頁面 1: 整合系統 ---
+if main_page == "🎯 股神雷達整合系統":
+    st.title("📡 股神系統旗艦整合版")
+    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 股神雷達", "💰 成交排行", "📈 互動看盤", "🚀 波段掃描", "🔥 量能監控", "🔍 全台股低檔快篩"])
+
+    with t1:
+        if st.button("🚀 啟動完整雷達掃描", use_container_width=True):
+            start_t = time.time()
+            res, prc = [], 0
+            pb, txt = st.progress(0), st.empty()
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                futs = [ex.submit(analyze_stock_score, t, n) for t, n in STOCKS.items()]
+                for f in as_completed(futs):
+                    prc += 1
+                    pb.progress(prc / len(STOCKS))
+                    txt.text(f"🔄 掃描中: {prc}/{len(STOCKS)} ...")
+                    if f.result(): res.append(f.result())
+            pb.empty(); txt.empty()
+            st.success(f"✅ 完成！耗時 {round(time.time() - start_t, 1)} 秒。")
+            if res:
+                df = pd.DataFrame(res).sort_values(by=['Sort_Score','日K'], ascending=False)
+                st.session_state['df_radar'] = df.drop(columns=['Sort_Score']).head(35)
+        if 'df_radar' in st.session_state:
+            st.dataframe(st.session_state['df_radar'], use_container_width=True)
+
+    with t2:
+        if st.button("🔄 刷新即時排行"): st.cache_data.clear()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📈 上市排行 (TWSE)")
+            df1 = get_rank("TWSE")
+            if df1 is not None:
+                df1_disp = df1.head(15).copy()
+                df1_disp['金額'] = df1_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+                st.table(df1_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
+        with c2:
+            st.subheader("📉 上櫃排行 (TPEx)")
+            df2 = get_rank("TPEx")
+            if df2 is not None:
+                df2_disp = df2.head(15).copy()
+                df2_disp['金額'] = df2_disp['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+                st.table(df2_disp[['證券代號','證券名稱','金額']].reset_index(drop=True))
+
+    with t3:
+        sid = st.text_input("🔍 代號 (如 2330)", value="2330")
+        if sid:
+            tid = sid + ".TW" if "." not in sid else sid
+            try:
+                d = yf.Ticker(tid).history(period="1y")
+                if not d.empty:
+                    d = calculate_kd(d)
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+                    fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+                    fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+                    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
+            except: st.error("查無資料")
+
+    with t6:
+        st.subheader("🔍 全台股：低檔爆量強勢股偵測")
+        if st.button("🚀 開始全市場大掃描", use_container_width=True):
+            with st.spinner("大掃描進行中..."):
+                pool = []
+                d1, d2 = get_rank("TWSE"), get_rank("TPEx")
+                if d1 is not None:
+                    for _, r in d1.head(150).iterrows(): pool.append((r['證券代號'] + ".TW", r['證券名稱']))
+                if d2 is not None:
+                    for _, r in d2.head(100).iterrows(): pool.append((r['證券代號'] + ".TWO", r['證券名稱']))
+                results = []
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    f_to_s = {executor.submit(check_low_breakout, t, n): t for t, n in pool}
+                    for f in as_completed(f_to_s):
+                        if f.result(): results.append(f.result())
+                if results:
+                    st.dataframe(pd.DataFrame(results).sort_values('量能倍數', ascending=False), use_container_width=True)
+                else: st.warning("目前無符合條件標的。")
+
+# --- 頁面 2: 專業排行 (源自成交值排行15名.py) ---
+else:
+    st.title("💰 專業成交值排行榜 TOP 15")
+    st.info("💡 資料來源：證交所與櫃買中心 API")
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.header("🏢 上市成交 TOP 15")
+        df_a = get_rank("TWSE")
+        if df_a is not None:
+            df_a_15 = df_a.head(15).copy()
+            df_a_15['成交金額(元)'] = df_a_15['值'].apply(lambda x: f"{int(x):,}")
+            df_a_15.index = range(1, 16)
+            st.dataframe(df_a_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)
+
+    with col_b:
+        st.header("🏪 上櫃成交 TOP 15")
+        df_b = get_rank("TPEx")
+        if df_b is not None:
+            df_b_15 = df_b.head(15).copy()
+            df_b_15['成交金額(元)'] = df_b_15['值'].apply(lambda x: f"{int(x):,}")
+            df_b_15.index = range(1, 16)
+            st.dataframe(df_b_15[['證券代號', '證券名稱', '成交金額(元)']], use_container_width=True)

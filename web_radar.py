@@ -12,7 +12,7 @@ import urllib3
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -177,7 +177,7 @@ s_list = [t.strip() for t in u_in.replace('，',',').split(',') if t.strip()]
 
 # === 6. 主頁面內容 ===
 if main_p == "🎯 股神六星雷達系統":
-    st.title("📡 老盧股神系統：終極即時版")
+    st.title("📡 稀有的股神系統：終極即時版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
     
     with t1:

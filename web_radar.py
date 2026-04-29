@@ -12,7 +12,7 @@ import urllib3
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧股神系統雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}

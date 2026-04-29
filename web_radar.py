@@ -48,13 +48,14 @@ def analyze_stock_score(ticker, name):
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period="1y")
+        # 🛡️ 濾除幽靈空值
+        df.dropna(subset=['Close'], inplace=True)
         if df.empty or len(df) < 65: return None
         
         close = df['Close'].iloc[-1]
         vol_today = df['Volume'].iloc[-1]
         vol_5d = df['Volume'].iloc[-6:-1].mean()
         
-        # 濾網：剔除流動性太差的股票 (5日均量小於1000張)
         if vol_5d < 1000000: return None
         
         df['MA5'] = df['Close'].rolling(5).mean()
@@ -95,11 +96,20 @@ def analyze_stock_score(ticker, name):
         }
     except: return None
 
-# === 4. 持股出場診斷邏輯 ===
-def diagnose_holding(ticker):
+# === 4. 持股出場診斷邏輯 (防空值 + 上櫃自動偵測) ===
+def diagnose_holding(ticker_input):
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="6mo")
+        # 自動判斷是否為上櫃股票
+        tid = ticker_input + ".TW" if "." not in ticker_input else ticker_input
+        df = yf.Ticker(tid).history(period="6mo")
+        df.dropna(subset=['Close'], inplace=True) # 🛡️ 濾除幽靈空值
+        
+        # 如果上市找不到，自動去上櫃找
+        if df.empty and "." not in ticker_input:
+            tid = ticker_input + ".TWO"
+            df = yf.Ticker(tid).history(period="6mo")
+            df.dropna(subset=['Close'], inplace=True)
+            
         if df.empty or len(df) < 30: return None
 
         df['MA5'] = df['Close'].rolling(5).mean()
@@ -130,7 +140,7 @@ def diagnose_holding(ticker):
             status.append("✅ 均線與動能皆維持強勢多頭")
 
         return {
-            "收盤價": round(close, 2), "5日線": round(ma5, 2), "月線": round(ma20, 2),
+            "標的代號": tid, "收盤價": round(close, 2), "5日線": round(ma5, 2), "月線": round(ma20, 2),
             "KD狀態": f"K: {round(k,1)} / D: {round(d,1)}",
             "技術面診斷": "、".join(status), "系統建議": action
         }
@@ -265,32 +275,59 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning("⚠️ 暫時抓不到上櫃資料，可能因非交易時段。")
 
     with t3:
-        sid = st.text_input("🔍 代號 (如 2330)", value="2330", key="chart_input")
-        if sid:
-            tid = sid + ".TW" if "." not in sid else sid
-            try:
-                d = yf.Ticker(tid).history(period="1y")
-                if not d.empty:
-                    d = calculate_kd(d)
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-                    fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name='K線'), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-                    fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-                    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-                    st.plotly_chart(fig, use_container_width=True)
-            except: st.error("查無資料")
+        st.subheader("📈 個股 K 線與動能分析")
+        col_input, col_btn = st.columns([3, 1])
+        with col_input:
+            sid = st.text_input("🔍 輸入股票代號 (直接輸入代號即可)", value="2330", key="chart_input")
+        with col_btn:
+            st.write("") # 為了排版對齊
+            st.write("")
+            chart_submitted = st.button("📈 繪製 K 線圖", use_container_width=True)
+
+        # 加入按鈕控制，點擊按鈕後才執行繪圖
+        if chart_submitted and sid:
+            with st.spinner("讀取圖表中..."):
+                tid = sid + ".TW" if "." not in sid else sid
+                try:
+                    df = yf.Ticker(tid).history(period="1y")
+                    df.dropna(subset=['Close'], inplace=True) # 🛡️ 濾除空值
+                    
+                    # 上櫃自動切換
+                    if df.empty and "." not in sid:
+                        tid = sid + ".TWO"
+                        df = yf.Ticker(tid).history(period="1y")
+                        df.dropna(subset=['Close'], inplace=True)
+
+                    if not df.empty:
+                        d = calculate_kd(df)
+                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
+                        fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name=tid), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+                        fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+                        fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, title_text=f"{tid} 行情圖")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.error("⚠️ 查無此股票資料。")
+                except: st.error("⚠️ 資料讀取失敗。")
 
     with t4:
         st.subheader("🛡️ 智慧出場與持股診斷")
-        st.write("輸入手中的持股代號，系統將幫你檢查目前的均線支撐與動能，判斷是否該獲利了結或停損。")
-        diag_sid = st.text_input("🔍 輸入持股代號 (如 2330)", value="", key="diag_input")
+        st.write("輸入持股代號，系統將幫你檢查目前的均線支撐與動能，判斷是否該獲利了結或停損。")
         
-        if diag_sid:
-            tid = diag_sid + ".TW" if "." not in diag_sid else diag_sid
-            with st.spinner('診斷中...'):
-                result = diagnose_holding(tid)
+        col_diag_input, col_diag_btn = st.columns([3, 1])
+        with col_diag_input:
+            diag_sid = st.text_input("🔍 輸入持股代號 (直接輸入代號即可)", value="2330", key="diag_input")
+        with col_diag_btn:
+            st.write("") # 為了排版對齊
+            st.write("")
+            diag_submitted = st.button("🛡️ 執行診斷", use_container_width=True)
+        
+        # 加入按鈕控制，點擊按鈕後才執行診斷
+        if diag_submitted and diag_sid:
+            with st.spinner('機密診斷中...'):
+                result = diagnose_holding(diag_sid)
                 if result:
-                    st.markdown(f"### 🎯 診斷結果")
+                    st.markdown(f"### 🎯 {result['標的代號']} 診斷結果")
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("收盤價", result['收盤價'])
                     c2.metric("5日線 (極短線支撐)", result['5日線'])
@@ -306,7 +343,7 @@ if main_page == "🎯 股神六星雷達系統":
                     else:
                         st.error(f"**行動建議：** {result['系統建議']}")
                 else:
-                    st.error("⚠️ 查無此股票資料，請確認代號是否正確。")
+                    st.error("⚠️ 查無此股票資料，或資料筆數不足以進行診斷。")
 
 else:
     st.title("💰 專業成交值排行榜 TOP 15")

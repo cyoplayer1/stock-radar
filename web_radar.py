@@ -281,7 +281,7 @@ def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1, whale_typ
         st.error(f"讀取資料庫錯誤: {e}")
         return None
 
-# === 7. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 (升級成本估算引擎) ===
+# === 7. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 (滿水位防呆引擎) ===
 def get_stock_price(ticker, days=5):
     """取得最近幾天的歷史股價，用來估算經理人成本"""
     try:
@@ -299,17 +299,17 @@ def get_stock_price(ticker, days=5):
 def get_00981a_holdings_history():
     dates = pd.date_range(end=pd.Timestamp.today(), periods=5).strftime('%Y-%m-%d').tolist()
     data = []
-    # 模擬持股數據 (實務上接爬蟲)
+    # 模擬持股數據，加入「接近滿水位」的情境測試
     mock_data = [
-        ("2317", "鴻海", [1000, 1500, 2000, 3000, 5000], 8.5), # (代號, 名稱, 5日張數, 預估權重%)
+        ("2317", "鴻海", [1000, 1500, 2000, 3000, 5000], 8.5), 
         ("2345", "智邦", [1000, 1200, 1500, 1900, 2500], 5.2), 
-        ("2383", "台光電", [3000, 3000, 3000, 3500, 4200], 9.8), # 權重快滿了
+        ("2383", "台光電", [3000, 3000, 3000, 3500, 4200], 9.8), # ⚠️ 台積電以外，接近 10% 上限
         ("3231", "緯創", [2000, 2000, 2000, 2000, 3500], 3.0), 
         ("2454", "聯發科", [500, 500, 600, 800, 1200], 6.5),   
         ("2368", "金像電", [100, 300, 500, 800, 1200], 2.1),   
         ("3017", "奇鋐", [800, 800, 800, 1200, 1800], 7.0),    
         ("3661", "世芯-KY", [200, 200, 200, 200, 400], 4.5),   
-        ("2330", "台積電", [8000, 8000, 8000, 8000, 8000], 9.9), 
+        ("2330", "台積電", [8000, 8000, 8000, 8000, 8000], 19.5), # 💡 台積電特權，天花板是 25%
         ("3324", "雙鴻", [500, 500, 500, 500, 500], 1.5),       
         ("2308", "台達電", [5000, 5200, 5500, 5800, 4500], 4.0), 
         ("2382", "廣達", [4000, 4000, 4000, 3000, 2000], 3.8),   
@@ -335,8 +335,20 @@ def analyze_manager_moves_with_cost(df):
                 
         latest_record = group.iloc[-1]
         weight = latest_record['目前權重(%)']
-        weight_str = f"{weight}%"
-        if weight > 9.0: weight_str += " ⚠️(近上限)"
+        
+        # === 🚨 權重滿水位防追高警示邏輯 ===
+        # 台積電(2330)天花板是25%，其他股票是10%
+        max_limit = 25.0 if stock_id == "2330" else 10.0
+        
+        if weight >= (max_limit - 0.5):
+            weight_str = f"🛑 {weight}% (滿水位)"
+            action_hint = "❌ 嚴禁追高 (被迫結帳區)"
+        elif weight >= (max_limit - 2.0):
+            weight_str = f"⚠️ {weight}% (近上限)"
+            action_hint = "🟡 子彈將盡 (留意倒貨)"
+        else:
+            weight_str = f"✅ {weight}%"
+            action_hint = "🟢 空間充裕 (可跟單)"
         
         # --- VWAP 經理人成本估算邏輯 ---
         est_cost = 0.0
@@ -345,7 +357,6 @@ def analyze_manager_moves_with_cost(df):
             prices = get_stock_price(stock_id, consecutive_buy)
             buy_vols = diffs[-consecutive_buy:]
             if len(prices) == len(buy_vols) and sum(buy_vols) > 0:
-                # 均價 = Sum(每日價格 * 買進張數) / 總買進張數
                 est_cost = sum(p * v for p, v in zip(prices, buy_vols)) / sum(buy_vols)
                 current_p = prices[-1]
                 dist = ((current_p - est_cost) / est_cost) * 100
@@ -359,7 +370,8 @@ def analyze_manager_moves_with_cost(df):
             "代號": stock_id, 
             "股票名稱": latest_record['股票名稱'], 
             "最新持股張數": int(latest_record['持有張數']),
-            "目前權重(%)": weight_str,
+            "權重與狀態": weight_str,
+            "跟單建議": action_hint,
             "今日買超(張)": int(latest_record['單日買賣超(張)']), 
             "動向狀態": status, 
             "連買天數": f"{days} 天" if days > 0 else "-",
@@ -508,18 +520,18 @@ elif main_page in ["🐳 大戶(投信)連買狙擊雷達", "🦅 大戶(外資)
 # 分頁 4: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
-    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼成本透視)")
+    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (滿水位防追高版)")
     st.markdown("""
-    **💡 頂級操盤手視角**：不只抓連買，還能**透視經理人的建倉成本與權重上限**！
-    若「預估成本」接近現價，且權重尚未達 10% 天花板，搭配六星雷達 5 星，即是黃金買點！
+    **💡 頂級操盤手視角**：不只抓連買，系統會自動幫你檢查**ETF權重天花板**與**六星雷達共振**！
+    若「權重與狀態」亮起紅燈，代表大戶被迫將在近期倒貨，此時**嚴禁追高**！
     """)
     st.divider()
     
-    st.subheader("🔥 今日經理人換股動向排行榜 (含成本與星等)")
+    st.subheader("🔥 今日經理人換股動向排行榜 (含六星與權重健檢)")
     
     raw_df = get_00981a_holdings_history()
     
-    with st.spinner("✨ 正在計算經理人建倉均價，並執行六星雷達掃描 (約需 3-5 秒)..."):
+    with st.spinner("✨ 正在估算經理人建倉均價、檢查權重水位，並執行六星掃描 (約需 3-5 秒)..."):
         analyzed_df = analyze_manager_moves_with_cost(raw_df)
         
         inst_map = get_inst_data()
@@ -532,6 +544,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             futs = {ex.submit(get_star, ticker): ticker for ticker in analyzed_df['代號']}
             star_dict = {futs[f]: f.result() for f in as_completed(futs)}
                 
+        # 將「六星雷達」插入到股票名稱後面
         analyzed_df.insert(2, '六星雷達', analyzed_df['代號'].map(star_dict))
 
     st.dataframe(
@@ -543,9 +556,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     )
     
     st.divider()
-    st.subheader("💡 實戰狙擊建議 (進階版)")
+    st.subheader("💡 實戰狙擊建議 (避險防呆版)")
     col1, col2 = st.columns(2)
     with col1:
-        st.success("**🎯 完美抬轎訊號**\n* 狀態為 **🟢 主力連買**，且「成本乖離率」在 **+3% 以內** (代表經理人剛建倉，你買的成本跟他差不多)。\n* 六星雷達顯示 `⭐⭐⭐⭐⭐`。\n* 「目前權重」仍低於 8%，代表經理人還有很多子彈可以加碼。")
+        st.success("**🎯 完美抬轎訊號**\n* 跟單建議顯示 **🟢 空間充裕 (可跟單)**。\n* 乖離率在 **+3% 以內** (代表你現在進場，成本跟大戶幾乎一樣)。\n* 六星雷達顯示 `⭐⭐⭐⭐⭐`。")
     with col2:
-        st.error("**🛑 避開出貨陷阱**\n* 乖離率若超過 **+15%**，就算連買也勿追高，經理人隨時可能倒貨。\n* 如果看到 `⚠️(近上限)` 的標籤，代表該股佔 ETF 權重已接近法規 10% 上限，經理人**被迫無法再買**，股價隨時反轉！")
+        st.error("**🛑 避開被迫結帳陷阱**\n* 如果跟單建議顯示 **❌ 嚴禁追高 (被迫結帳區)**，代表該股佔 ETF 權重已接近法規上限，經理人隨時會被法規強制賣出，股價極易反轉下殺！")

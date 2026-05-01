@@ -202,46 +202,74 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🐳 大戶爬蟲與 SQLite 整合引擎 (內建版) ===
+# === 6. 🐳 大戶爬蟲與 SQLite 整合引擎 (同時抓取投信與外資) ===
 def fetch_and_save_whale_data(db_name="whale_tracker.db"):
     url = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
     data = safe_get_json(url)
     
-    if not data or 'data' not in data: return False, "今日無數據或抓取失敗 (可能是假日或尚未更新)"
+    if not data or 'data' not in data: return False, "今日無數據或抓取失敗 (可能是假日或尚未盤後更新)"
     
     try:
         columns = data['fields']
         df = pd.DataFrame(data['data'], columns=columns)
-        df_clean = df[['證券代號', '證券名稱', '投信買賣超股數']].copy()
-        df_clean['投信買賣超(張)'] = df_clean['投信買賣超股數'].str.replace(',', '').astype(int) / 1000
-        df_clean['日期'] = datetime.date.today().strftime("%Y-%m-%d")
-        result_df = df_clean[['日期', '證券代號', '證券名稱', '投信買賣超(張)']]
         
+        # 智慧尋找對應的欄位名稱 (防呆TWSE改名)
+        trust_col = [c for c in columns if '投信買賣超' in c][0]
+        foreign_col = [c for c in columns if '外陸資買賣超' in c or ('外資' in c and '買賣超' in c)][0]
+        
+        # 轉換股數為張數
+        df['投信買賣超(張)'] = df[trust_col].str.replace(',', '').astype(float) / 1000
+        df['外資買賣超(張)'] = df[foreign_col].str.replace(',', '').astype(float) / 1000
+        df['日期'] = datetime.date.today().strftime("%Y-%m-%d")
+        
+        trust_df = df[['日期', '證券代號', '證券名稱', '投信買賣超(張)']]
+        foreign_df = df[['日期', '證券代號', '證券名稱', '外資買賣超(張)']]
+        
+        # 連線並建立兩個資料表
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS trust_net_buy (日期 TEXT, 證券代號 TEXT, 證券名稱 TEXT, "投信買賣超(張)" REAL)')
+        cursor.execute('CREATE TABLE IF NOT EXISTS foreign_net_buy (日期 TEXT, 證券代號 TEXT, 證券名稱 TEXT, "外資買賣超(張)" REAL)')
         
+        # 刪除今日舊資料防重複
         today_str = datetime.date.today().strftime("%Y-%m-%d")
         cursor.execute("DELETE FROM trust_net_buy WHERE 日期=?", (today_str,))
-        result_df.to_sql('trust_net_buy', conn, if_exists='append', index=False)
+        cursor.execute("DELETE FROM foreign_net_buy WHERE 日期=?", (today_str,))
+        
+        # 寫入
+        trust_df.to_sql('trust_net_buy', conn, if_exists='append', index=False)
+        foreign_df.to_sql('foreign_net_buy', conn, if_exists='append', index=False)
+        
         conn.commit()
         conn.close()
-        return True, f"成功寫入 {len(result_df)} 筆籌碼資料！"
+        return True, f"成功寫入 {len(df)} 筆投信與外資籌碼資料！"
     except Exception as e:
         return False, str(e)
 
 @st.cache_data(ttl=60)
-def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
+def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1, whale_type="trust"):
+    """讀取資料庫，whale_type: 'trust' (投信) 或 'foreign' (外資)"""
     if not os.path.exists(db_name): return None 
+    
+    table_name = "trust_net_buy" if whale_type == "trust" else "foreign_net_buy"
+    col_name = "投信買賣超(張)" if whale_type == "trust" else "外資買賣超(張)"
+    
     try:
         conn = sqlite3.connect(db_name)
-        df = pd.read_sql_query("SELECT * FROM trust_net_buy ORDER BY 證券代號, 日期", conn)
+        # 檢查表是否存在
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
+        if not cursor.fetchone():
+            conn.close()
+            return pd.DataFrame()
+            
+        df = pd.read_sql_query(f"SELECT * FROM {table_name} ORDER BY 證券代號, 日期", conn)
         conn.close()
         if df.empty: return pd.DataFrame()
         
         hot_stocks = []
         for stock_id, group in df.groupby('證券代號'):
-            diffs = group['投信買賣超(張)'].tolist()
+            diffs = group[col_name].tolist()
             buy_days, total_buy = 0, 0
             for net_buy in reversed(diffs):
                 if net_buy > 0:
@@ -314,7 +342,7 @@ def analyze_manager_moves(df):
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio(
     "跳轉頁面", 
-    ["🎯 股神六星雷達系統", "🐳 大戶(投信)連買狙擊雷達", "🕵️‍♂️ 00981A 經理人跟單雷達"]
+    ["🎯 股神六星雷達系統", "🐳 大戶(投信)連買狙擊雷達", "🦅 大戶(外資)連買狙擊雷達", "🕵️‍♂️ 00981A 經理人跟單雷達"]
 )
 st.sidebar.markdown("---")
 
@@ -337,7 +365,6 @@ if main_page == "🎯 股神六星雷達系統":
         * **核心指標：** 5顆星以上股票。
         * **黃金組合：** 同時出現 **[KD金叉]**、**[爆量攻擊]**、**🔥[排行熱門]** 與 **🔴[大戶進駐]**。
         * **三不買：** 沒量不買、月線向下不買、星星掉隊不買。
-        ---
         """)
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
@@ -356,12 +383,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.dataframe(df[['排名', '標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True, hide_index=True)
 
     with t2:
-        st.markdown("""
-        ### 💰 量能先行：主力足跡
-        * **前 15 名：** 這裡是當前盤面上資金最滾燙的地方。
-        * **連動參考：** 如果雷達星星也出現在這張清單，代表「熱點共振」。
-        ---
-        """)
+        st.markdown("### 💰 量能先行：主力足跡\n* **前 15 名：** 當前盤面上資金最滾燙的地方。")
         if st.button("🔄 刷新排行"): st.cache_data.clear()
         c1, c2 = st.columns(2)
         with c1:
@@ -391,12 +413,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.table(d15b[[0, 1, '金額']].rename(columns={0:'證券代號', 1:'證券名稱'}).reset_index(drop=True))
 
     with t3:
-        st.markdown("""
-        ### 📈 互動圖表：型態確認
-        * **看均線：** 股價是否「帶量」穿過三條均線？
-        * **看位置：** 買在突破盤整區的第一根 K 線，勝率最高。
-        ---
-        """)
+        st.markdown("### 📈 互動圖表：型態確認")
         sid = st.text_input("🔍 代號", value="2330", key="chart_in")
         if st.button("📈 繪圖", use_container_width=True):
             tid = sid + ".TW" if "." not in sid else sid
@@ -411,12 +428,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.plotly_chart(fig, use_container_width=True)
 
     with t4:
-        st.markdown("""
-        ### 🛡️ 診斷儀表板：賣出紀律
-        * **停損底線：** 跌破 20 日月線 = 趨勢毀掉，無條件離場。
-        * **短線減碼：** 股價離 5 日線太遠或 KD 高檔死叉時，先獲利了結。
-        ---
-        """)
+        st.markdown("### 🛡️ 診斷儀表板：賣出紀律")
         d_id = st.text_input("🔍 診斷代號", value="2330", key="diag_in")
         if st.button("🛡️ 執行診斷", use_container_width=True):
             r = diagnose_holding(d_id)
@@ -433,52 +445,76 @@ if main_page == "🎯 股神六星雷達系統":
 # 分頁 2: 🐳 大戶(投信)連買狙擊雷達
 # ==========================================
 elif main_page == "🐳 大戶(投信)連買狙擊雷達":
-    st.title("🐳 投信連買狙擊雷達 (真實數據)")
-    st.markdown("""
-    **💡 運作邏輯**：此模組內建爬蟲引擎，點擊下方按鈕即可自動去證交所抓取資料並建立資料庫。
-    只要投信大戶連續好幾天大買同一檔股票，跟著上車勝率極高！
-    """)
+    st.title("🐳 投信連買狙擊雷達 (作帳行情)")
+    st.markdown("**💡 運作邏輯**：點擊下方按鈕更新資料庫。投信偏好中小型爆發股，連買易有波段行情！")
     st.divider()
     
     if st.button("🔄 點我手動更新今日大戶籌碼 (更新資料庫)", type="primary"):
-        with st.spinner("🚀 正在前往證交所抓取最新籌碼，並建立資料庫，請稍候..."):
+        with st.spinner("🚀 正在抓取投信與外資最新籌碼，並建立資料庫..."):
             success, msg = fetch_and_save_whale_data()
             if success:
                 st.success(f"✅ 更新成功！{msg}")
                 time.sleep(1) 
                 st.rerun() 
-            else:
-                st.error(f"❌ 更新失敗：{msg}")
-    
+            else: st.error(f"❌ 更新失敗：{msg}")
     st.divider()
 
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.subheader("⚙️ 篩選條件設定")
-        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, help="累積幾天後建議設為 2 或 3。")
-    
+        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, key="trust_days")
     with col2:
-        st.info("⚠️ 如果下方顯示錯誤或沒資料，請點擊上方的紅色按鈕「更新今日大戶籌碼」來建立資料庫。")
+        st.info("⚠️ 若無資料，請確認今日盤後是否已點擊上方更新按鈕。")
         
     st.subheader(f"🔥 全市場投信連買排行榜 (連買 ≥ {min_days} 天)")
+    analyzed_df = get_whale_consecutive_buys(min_days=min_days, whale_type="trust")
     
-    analyzed_df = get_whale_consecutive_buys(min_days=min_days)
-    
-    if analyzed_df is None:
-        st.error("❌ 找不到資料庫檔案 (`whale_tracker.db`)！請先點擊上方的更新按鈕來抓取第一筆資料。")
-    elif analyzed_df.empty:
-        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。請確認今天盤後是否已更新。")
+    if analyzed_df is None: st.error("❌ 找不到資料庫！請先點擊上方更新按鈕。")
+    elif analyzed_df.empty: st.warning(f"📉 目前無投信連續買進達 {min_days} 天之股票。")
     else:
-        st.dataframe(
-            analyzed_df, use_container_width=True, hide_index=True, height=600, 
+        st.dataframe(analyzed_df, use_container_width=True, hide_index=True, height=600, 
             column_config={
                 "期間累積買超(張)": st.column_config.NumberColumn("期間累積買超(張)", format="%d"),
                 "連續天數": st.column_config.ProgressColumn("連續天數", format="%d 天", min_value=0, max_value=10)
-            }
-        )
+            })
 
 # ==========================================
-# 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 3: 🦅 大戶(外資)連買狙擊雷達
+# ==========================================
+elif main_page == "🦅 大戶(外資)連買狙擊雷達":
+    st.title("🦅 外資連買狙擊雷達 (波段趨勢)")
+    st.markdown("**💡 運作邏輯**：外資資金龐大，連續買進代表全球熱錢湧入，通常瞄準大型權值股或長線趨勢股。")
+    st.divider()
+    
+    if st.button("🔄 點我手動更新今日大戶籌碼 (與投信同步更新)", type="primary"):
+        with st.spinner("🚀 正在抓取投信與外資最新籌碼，並建立資料庫..."):
+            success, msg = fetch_and_save_whale_data()
+            if success:
+                st.success(f"✅ 更新成功！{msg}")
+                time.sleep(1) 
+                st.rerun() 
+            else: st.error(f"❌ 更新失敗：{msg}")
+    st.divider()
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, key="foreign_days")
+    with col2:
+        st.info("💡 投信與外資的資料庫是共用的，更新其中一邊，另一邊也會同步獲得最新數據！")
+        
+    st.subheader(f"🦅 全市場外資連買排行榜 (連買 ≥ {min_days} 天)")
+    analyzed_df = get_whale_consecutive_buys(min_days=min_days, whale_type="foreign")
+    
+    if analyzed_df is None: st.error("❌ 找不到資料庫！請先點擊上方更新按鈕。")
+    elif analyzed_df.empty: st.warning(f"📉 目前無外資連續買進達 {min_days} 天之股票。")
+    else:
+        st.dataframe(analyzed_df, use_container_width=True, hide_index=True, height=600, 
+            column_config={
+                "期間累積買超(張)": st.column_config.NumberColumn("期間累積買超(張)", format="%d"),
+                "連續天數": st.column_config.ProgressColumn("連續天數", format="%d 天", min_value=0, max_value=10)
+            })
+
+# ==========================================
+# 分頁 4: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼與六星共振)")
@@ -491,21 +527,18 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     
     st.subheader("🔥 今日經理人換股動向排行榜 (含雷達星等)")
     
-    # 執行籌碼分析
     raw_df = get_00981a_holdings_history()
     analyzed_df = analyze_manager_moves(raw_df)
     
-    # === 🚀 自動幫排行榜上的股票打上「六星雷達」 ===
-    with st.spinner("✨ 正在為經理人持股進行六星雷達掃描 (這會花幾秒鐘的時間)..."):
+    with st.spinner("✨ 正在為經理人持股進行六星雷達掃描..."):
         inst_map = get_inst_data()
         hot_list = get_hot_rank_ids()
         
         def get_star(ticker):
             res = analyze_stock_score(ticker, inst_map, hot_list)
             if res: return res['星等']
-            return "休息" # 若分數不夠或是資料不足顯示休息
+            return "休息" 
             
-        # 多執行緒並發掃描 14 檔股票
         with ThreadPoolExecutor(max_workers=5) as ex:
             futs = {ex.submit(get_star, ticker): ticker for ticker in analyzed_df['代號']}
             star_dict = {}
@@ -513,10 +546,8 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 ticker = futs[f]
                 star_dict[ticker] = f.result()
                 
-        # 將「六星雷達」欄位安插在「股票名稱」的後面 (位置 index 2)
         analyzed_df.insert(2, '六星雷達', analyzed_df['代號'].map(star_dict))
 
-    # 顯示出最終擁有星星的 DataFrame
     st.dataframe(
         analyzed_df, use_container_width=True, hide_index=True, height=550, 
         column_config={

@@ -18,7 +18,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="稀有的老魯股神系統", page_icon="📡", layout="wide")
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
 # === 2. 🛡️ 安全連線防護機制 ===
 def safe_get_json(url):
@@ -46,8 +45,46 @@ def calculate_kd(df):
     df['K'], df['D'] = k_v, d_v
     return df
 
+# === 4. 🚀 數據抓取函數 (修復 NameError) ===
+@st.cache_data(ttl=3600)
+def get_inst_data():
+    """抓取全市場法人大戶買賣超數據"""
+    inst_map = {}
+    try:
+        # 上市大戶
+        u1 = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
+        r1 = safe_get_json(u1)
+        if 'data' in r1:
+            for d in r1['data']: 
+                inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
+        # 上櫃大戶
+        u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
+        r2 = safe_get_json(u2)
+        if 'aaData' in r2:
+            for d in r2['aaData']: 
+                inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
+    except: pass
+    return inst_map
+
+@st.cache_data(ttl=300)
+def get_hot_rank_ids():
+    """抓取成交額前 30 名的熱門標的"""
+    hot_ids = set()
+    try:
+        u1 = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
+        res1 = safe_get_json(u1)
+        if 'tables' in res1:
+            for t in res1['tables']:
+                if '證券代號' in t.get('fields', []):
+                    df_tmp = pd.DataFrame(t['data'], columns=t['fields'])
+                    df_tmp['val'] = pd.to_numeric(df_tmp['成交金額'].str.replace(',',''), errors='coerce')
+                    hot_ids.update(df_tmp.sort_values('val', ascending=False).head(30)['證券代號'].tolist())
+                    break
+    except: pass
+    return hot_ids
+
 def get_stock_info_realtime(ticker):
-    """取得歷史收盤(算VWAP用)與今日即時OHLC"""
+    """取得歷史收盤(算VWAP用)與今日即時價格資訊"""
     try:
         clean = ticker.replace('.TW','').replace('.TWO','')
         tid = clean + ".TW"
@@ -56,11 +93,11 @@ def get_stock_info_realtime(ticker):
             tid = clean + ".TWO"
             df = yf.Ticker(tid).history(period="20d")
         if not df.empty:
-            return df['Close'].tolist(), df['Close'].iloc[-1], df['High'].iloc[-1], df['Low'].iloc[-1], df['Volume'].iloc[-1]
+            return df['Close'].tolist(), df['Close'].iloc[-1], df['High'].iloc[-1], df['Low'].iloc[-1]
     except: pass
-    return [], 0, 0, 0, 0
+    return [], 0, 0, 0
 
-# === 4. 六星共振評分引擎 ===
+# === 5. 六星共振評分引擎 ===
 def analyze_star_score(ticker, inst_map=None, hot_list=None):
     try:
         inst_map = inst_map or {}
@@ -71,7 +108,9 @@ def analyze_star_score(ticker, inst_map=None, hot_list=None):
         if df.empty or len(df) < 20: return None
         
         c = df['Close'].iloc[-1]
-        df['MA5'] = df['Close'].rolling(5).mean(); df['MA20'] = df['Close'].rolling(20).mean(); df['MA60'] = df['Close'].rolling(60).mean()
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df)
         
         s, tags = 0, []
@@ -85,7 +124,7 @@ def analyze_star_score(ticker, inst_map=None, hot_list=None):
         return {"星等": "⭐"*s if s>0 else "休息", "星星數": s, "現價": round(c,2), "條件": " ".join(tags)}
     except: return None
 
-# === 5. 🐳 大戶爬蟲引擎 (同步投信+外資) ===
+# === 6. 🐳 大戶爬蟲引擎 (同步投信+外資) ===
 def fetch_whale_data():
     url = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
     data = safe_get_json(url)
@@ -115,12 +154,11 @@ def fetch_whale_data():
         df_t.to_sql('trust_net_buy', conn, if_exists='append', index=False)
         df_f.to_sql('foreign_net_buy', conn, if_exists='append', index=False)
         conn.commit(); conn.close()
-        return True, f"成功更新 {len(df)} 筆籌碼數據"
+        return True, f"成功更新 {len(df)} 筆數據"
     except Exception as e: return False, str(e)
 
-# === 6. 🕵️‍♂️ 00981A 全成分股分析邏輯 ===
+# === 7. 🕵️‍♂️ 00981A 全成分股分析邏輯 ===
 def analyze_00981a_logic():
-    # 00981A 全成分股手冊 (代號: (名稱, 權重%))
     target_stocks = {
         "2330": ("台積電", 19.5), "2317": ("鴻海", 9.5), "2454": ("聯發科", 7.8), "2383": ("台光電", 6.5),
         "2345": ("智邦", 5.2), "3017": ("奇鋐", 4.8), "3324": ("雙鴻", 4.2), "6669": ("緯穎", 3.8),
@@ -133,7 +171,7 @@ def analyze_00981a_logic():
         "6147": ("頎邦", 0.2), "3016": ("嘉晶", 0.1), "2449": ("京元電", 0.1), "2379": ("瑞昱", 0.1)
     }
     
-    if not os.path.exists("whale_tracker.db"): return None
+    if not os.path.exists("whale_tracker.db"): return pd.DataFrame()
     try:
         conn = sqlite3.connect("whale_tracker.db")
         p = ','.join('?' for _ in target_stocks.keys())
@@ -149,7 +187,7 @@ def analyze_00981a_logic():
                 if d > 0: con_buy += 1
                 else: break
             
-            p_list, cur_p, hi, lo, vol = get_stock_info_realtime(sid)
+            p_list, cur_p, hi, lo = get_stock_info_realtime(sid)
             est_cost, dist_str = 0.0, "-"
             if con_buy > 0 and len(p_list) >= con_buy:
                 buy_vols = diffs[-con_buy:]
@@ -169,35 +207,32 @@ def analyze_00981a_logic():
                 "現價": cur_p, "均價": round(est_cost,1) if est_cost > 0 else "-", "成本乖離": dist_str,
                 "最高": hi, "最低": lo, "今日買超": int(diffs[-1]) if diffs else 0, "連買天數": con_buy
             })
-        
-        df_res = pd.DataFrame(results).sort_values(by=["連買天數", "今日買超"], ascending=[False, False])
-        return df_res
+        return pd.DataFrame(results).sort_values(by=["連買天數", "今日買超"], ascending=[False, False])
     except: return pd.DataFrame()
 
-# === 7. 側邊欄與 UI 渲染 ===
+# === 8. 側邊欄與 UI 渲染 ===
 st.sidebar.title("📡 老魯股神戰情室")
 page = st.sidebar.radio("導覽功能", ["🕵️‍♂️ 00981A 經理人跟單", "🎯 股神六星雷達", "🐳 全市場連買榜", "🔄 資料庫更新中心"])
 st.sidebar.divider()
 
 if page == "🕵️‍♂️ 00981A 經理人跟單":
     st.title("🕵️‍♂️ 00981A 經理人全成分股追蹤")
-    st.markdown("針對統一台股增長 ETF 進行 **「籌碼+成本+技術」** 三重共振分析。")
     if st.button("🚀 啟動全成分股即時共振掃描", use_container_width=True):
-        with st.spinner("✨ 正在計算 36 檔成分股的均價成本與六星評分..."):
+        with st.spinner("✨ 正在同步數據..."):
             df = analyze_00981a_logic()
             if not df.empty:
+                inst_map = get_inst_data()
                 with ThreadPoolExecutor(max_workers=10) as ex:
-                    star_dict = {sid: ex.submit(analyze_star_score, sid).result() for sid in df['代號']}
+                    star_dict = {sid: ex.submit(analyze_star_score, sid, inst_map).result() for sid in df['代號']}
                 df.insert(2, '六星雷達', df['代號'].apply(lambda x: star_dict[x]['星等'] if star_dict[x] else "休息"))
                 df.reset_index(drop=True, inplace=True); df.insert(0, '排名', df.index + 1)
                 st.dataframe(df[['排名', '股票名稱', '六星雷達', '現價', '均價', '成本乖離', '最高', '最低', '連買天數', '今日買超', '權重狀態', '跟單建議']], use_container_width=True, hide_index=True, height=750)
-            else: st.error("❌ 無數據，請先點擊資料庫更新。")
+            else: st.error("❌ 無數據，請點擊資料庫更新。")
 
 elif page == "🎯 股神六星雷達":
     st.title("🎯 股神六星掃描儀")
     st.sidebar.subheader("⚙️ 自選股水庫")
-    def_tickers = "2330, 2317, 2454, 2383, 2345, 3017, 3324, 6669, 3231, 2382, 3037, 3533, 1513, 1519, 2603, 2609, 3711, 2303, 2308, 2357"
-    u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
+    u_input = st.sidebar.text_area("輸入代號 (逗號分隔)：", value="2330, 2317, 2454, 2383, 2345, 3017, 3324, 6669, 3231, 2382, 3037, 3533, 1513, 1519, 2603", height=200)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
     if st.button("🚀 全自動即時掃描", use_container_width=True):
         inst_map, hot_list = get_inst_data(), get_hot_rank_ids()
@@ -232,13 +267,11 @@ elif page == "🐳 全市場連買榜":
         df_hot = pd.DataFrame(hot).sort_values(by="連買天數", ascending=False)
         df_hot.reset_index(drop=True, inplace=True); df_hot.insert(0, '排名', df_hot.index + 1)
         st.dataframe(df_hot, use_container_width=True, hide_index=True)
-    else: st.warning("請先執行更新")
 
 elif page == "🔄 資料庫更新中心":
     st.title("🔄 數據同步中心")
-    st.warning("⚠️ 每日下午 16:00 證交所公布籌碼後，請點擊更新。")
     if st.button("🔥 同步更新投信與外資大戶籌碼", type="primary", use_container_width=True):
         with st.spinner("🚀 連線證交所中..."):
-            success, msg = fetch_whale_data()
-            if success: st.success(msg); time.sleep(1); st.rerun()
-            else: st.error(msg)
+            s, m = fetch_whale_data()
+            if s: st.success(m); time.sleep(1); st.rerun()
+            else: st.error(m)

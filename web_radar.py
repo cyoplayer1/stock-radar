@@ -10,10 +10,11 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
+import sqlite3
+import os
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
-# 🛡️ 忽略因為跳過 SSL 驗證產生的警告訊息
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
@@ -201,77 +202,59 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 ===
-def get_00981a_holdings_history():
-    """模擬歷史資料：擴充為 14 檔涵蓋各種買賣情境的股票"""
-    dates = pd.date_range(end=pd.Timestamp.today(), periods=5).strftime('%Y-%m-%d').tolist()
-    data = []
-    
-    # 建立多種情境的模擬數據 (格式: 代號, 名稱, [第1天張數, 第2天張數, ..., 第5天張數])
-    mock_data = [
-        ("2317", "鴻海", [1000, 1500, 2000, 3000, 5000]), # 🟢 連買 4 天 (大幅加碼)
-        ("2345", "智邦", [1000, 1200, 1500, 1900, 2500]), # 🟢 連買 4 天
-        ("2383", "台光電", [3000, 3000, 3000, 3500, 4200]), # 🟢 連買 2 天
-        ("3231", "緯創", [2000, 2000, 2000, 2000, 3500]), # 🟢 剛發動買進 1 天
-        ("2454", "聯發科", [500, 500, 600, 800, 1200]),   # 🟢 連買 2 天
-        ("2368", "金像電", [100, 300, 500, 800, 1200]),   # 🟢 連買 4 天
-        ("3017", "奇鋐", [800, 800, 800, 1200, 1800]),    # 🟢 連買 2 天
-        ("3661", "世芯-KY", [200, 200, 200, 200, 400]),   # 🟢 剛發動買進 1 天
-        ("2330", "台積電", [8000, 8000, 8000, 8000, 8000]), # ⚪ 靜止觀望
-        ("3324", "雙鴻", [500, 500, 500, 500, 500]),       # ⚪ 靜止觀望
-        ("2308", "台達電", [5000, 5200, 5500, 5800, 4500]), # 🔴 剛轉賣 1 天
-        ("2382", "廣達", [4000, 4000, 4000, 3000, 2000]),   # 🔴 連賣 2 天
-        ("3034", "聯詠", [1000, 1000, 800, 500, 200]),     # 🔴 連賣 3 天
-        ("2603", "長榮", [5000, 4000, 3000, 2000, 1000]),   # 🔴 連賣 4 天 (強力倒貨)
-    ]
-
-    for ticker, name, shares in mock_data:
-        for d, s in zip(dates, shares):
-            data.append([d, ticker, name, s])
-
-    return pd.DataFrame(data, columns=['日期', '代號', '股票名稱', '持有張數'])
-
-def analyze_manager_moves(df):
-    df = df.sort_values(by=['代號', '日期'])
-    df['單日買賣超(張)'] = df.groupby('代號')['持有張數'].diff().fillna(0)
-    
-    results = []
-    for stock_id, group in df.groupby('代號'):
-        group = group.sort_values('日期')
-        diffs = group['單日買賣超(張)'].tolist()
+# === 6. 🐳 SQLite 資料庫讀取邏輯 (全市場大戶跟單) ===
+@st.cache_data(ttl=600) # 快取 10 分鐘，避免頻繁讀取硬碟
+def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
+    """讀取本地 SQLite 資料庫，計算投信連買天數"""
+    if not os.path.exists(db_name):
+        return None # 資料庫不存在
         
-        consecutive_buy = 0
-        for diff in reversed(diffs):
-            if diff > 0: consecutive_buy += 1
-            else: break
-                
-        consecutive_sell = 0
-        for diff in reversed(diffs):
-            if diff < 0: consecutive_sell += 1
-            else: break
-                
-        latest_record = group.iloc[-1]
+    try:
+        conn = sqlite3.connect(db_name)
+        # 抓出全部歷史資料，依照代號跟日期排序
+        df = pd.read_sql_query("SELECT * FROM trust_net_buy ORDER BY 證券代號, 日期", conn)
+        conn.close()
         
-        if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
-        elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
-        else: status, days = "⚪ 靜止觀望", 0
+        if df.empty: return pd.DataFrame()
+        
+        hot_stocks = []
+        # 分組運算連續買進天數
+        for stock_id, group in df.groupby('證券代號'):
+            diffs = group['投信買賣超(張)'].tolist()
+            buy_days = 0
+            total_buy = 0
             
-        results.append({
-            "代號": stock_id,
-            "股票名稱": latest_record['股票名稱'],
-            "最新持股張數": int(latest_record['持有張數']),
-            "今日買賣超(張)": int(latest_record['單日買賣超(張)']),
-            "動向狀態": status,
-            "連續天數": f"{days} 天" if days > 0 else "-"
-        })
-        
-    return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
+            # 從最近一天往前算
+            for net_buy in reversed(diffs):
+                if net_buy > 0:
+                    buy_days += 1
+                    total_buy += net_buy
+                else:
+                    break 
+                    
+            if buy_days >= min_days:
+                stock_name = group.iloc[-1]['證券名稱']
+                hot_stocks.append({
+                    "代號": stock_id,
+                    "股票名稱": stock_name,
+                    "動向狀態": "🟢 主力連買",
+                    "連續天數": buy_days,
+                    "期間累積買超(張)": int(total_buy),
+                    "最新資料日期": group.iloc[-1]['日期']
+                })
+                
+        if hot_stocks:
+            return pd.DataFrame(hot_stocks).sort_values(by="連續天數", ascending=False)
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"讀取資料庫時發生錯誤: {e}")
+        return None
 
 # === 7. 側邊欄與介面 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio(
     "跳轉頁面", 
-    ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"]
+    ["🎯 股神六星雷達系統", "🐳 大戶(投信)連買狙擊雷達"]
 )
 st.sidebar.markdown("---")
 
@@ -305,9 +288,22 @@ if main_page == "🎯 股神六星雷達系統":
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
+            
+            # 🏆 包含「排名」機制的顯示邏輯
             if res:
-                df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
-                st.dataframe(df[['標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
+                # 1. 轉成 DataFrame 並進行雙重排序 (先比星星數，同星數再比今日成交量)
+                df = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False])
+                
+                # 2. 重設索引，並產生「排名」欄位 (從 1 開始)
+                df.reset_index(drop=True, inplace=True)
+                df.insert(0, '排名', df.index + 1) # 將「排名」插在最左邊第一欄
+                
+                # 3. 顯示結果，並隱藏原本醜醜的預設 index
+                st.dataframe(
+                    df[['排名', '標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], 
+                    use_container_width=True, 
+                    hide_index=True
+                )
 
     with t2:
         st.markdown("""
@@ -321,7 +317,7 @@ if main_page == "🎯 股神六星雷達系統":
         with c1:
             st.subheader("📈 上市排行")
             url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-            res = safe_get_json(url, HEADERS) # 🛡️ 使用安全連線
+            res = safe_get_json(url, HEADERS) 
             if res and 'tables' in res:
                 for table in res['tables']:
                     if '證券代號' in table.get('fields', []):
@@ -334,7 +330,7 @@ if main_page == "🎯 股神六星雷達系統":
         with c2:
             st.subheader("📉 上櫃排行")
             url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-            res = safe_get_json(url, HEADERS) # 🛡️ 使用安全連線
+            res = safe_get_json(url, HEADERS) 
             data_otc = res.get('aaData', []) or (res.get('tables', [{}])[0].get('data', []) if res and 'tables' in res else [])
             if data_otc:
                 df2 = pd.DataFrame(data_otc)
@@ -384,43 +380,55 @@ if main_page == "🎯 股神六星雷達系統":
                 else: st.error(f"**建議：** {r['建議']}")
 
 # ==========================================
-# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 2: 🐳 大戶(投信)連買狙擊雷達
 # ==========================================
-elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
-    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼追蹤)")
+elif main_page == "🐳 大戶(投信)連買狙擊雷達":
+    st.title("🐳 投信連買狙擊雷達 (真實數據)")
     st.markdown("""
-    **💡 策略邏輯**：主動式 ETF 必須每日公布持股。我們透過比對「今日」與「昨日」的持股張數，
-    就能抓出統一投信經理人正在偷偷**連續加碼**哪些股票，直接跟著主力籌碼上車！
+    **💡 運作邏輯**：此模組會讀取後端每日抓取的 `whale_tracker.db` 資料庫。
+    只要投信大戶連續好幾天大買同一檔股票，通常代表背後有極強的基本面支撐或換股潮，跟著上車勝率極高！
     """)
-    st.info("⚠️ 目前載入為系統內建模擬資料範例（14檔熱門標的）。實務上可串接投信每日公布的 CSV 檔案。")
     st.divider()
     
-    st.subheader("🔥 今日經理人換股動向排行榜")
-    
-    # 執行籌碼分析
-    raw_df = get_00981a_holdings_history()
-    analyzed_df = analyze_manager_moves(raw_df)
-    
-    # 使用 dataframe 顯示並特別設定數字欄位的格式
-    st.dataframe(
-        analyzed_df,
-        use_container_width=True,
-        hide_index=True,
-        height=550, # 加高表格以容納更多資料
-        column_config={
-            "今日買賣超(張)": st.column_config.NumberColumn(
-                "今日買賣超(張)", help="正數代表買進，負數代表賣出", format="%d"
-            ),
-            "最新持股張數": st.column_config.NumberColumn(
-                "最新持股張數", format="%d"
-            )
-        }
-    )
-    
-    st.divider()
-    st.subheader("💡 實戰跟單建議")
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 2])
     with col1:
-        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 如果切換到「股神六星雷達」判定該股為 `5星`，可以直接重倉上車。")
+        st.subheader("⚙️ 篩選條件設定")
+        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=2, step=1, help="過濾掉只買一天的雜訊，建議設定 2 或 3 天以上。")
+    
     with col2:
-        st.error("**避險與出場訊號**\n* 狀態出現 **🔴 經理人倒貨**。\n* 主動式 ETF 換股果決，發現經理人由買轉賣 (負數)，且連續賣出，立刻跟著拔檔！")
+        st.info("⚠️ **系統提示**：此頁面依賴後端爬蟲 `whale_engine.py` 每日更新。若查無資料，請確認你今天盤後有執行過後端引擎。")
+        
+    st.divider()
+    st.subheader(f"🔥 全市場投信連買排行榜 (連買 ≥ {min_days} 天)")
+    
+    # 執行資料庫讀取
+    analyzed_df = get_whale_consecutive_buys(min_days=min_days)
+    
+    if analyzed_df is None:
+        st.error("❌ 找不到資料庫檔案 (`whale_tracker.db`)！請先在終端機執行 `python whale_engine.py` 來建立並抓取第一筆資料。")
+    elif analyzed_df.empty:
+        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。可能是資料累積天數不夠，請多執行幾天後端爬蟲。")
+    else:
+        # 使用 dataframe 顯示並特別設定數字欄位的格式
+        st.dataframe(
+            analyzed_df,
+            use_container_width=True,
+            hide_index=True,
+            height=600, 
+            column_config={
+                "期間累積買超(張)": st.column_config.NumberColumn(
+                    "期間累積買超(張)", help="連續買進這幾天加總的總張數", format="%d"
+                ),
+                "連續天數": st.column_config.ProgressColumn(
+                    "連續天數", help="投信連續買進不中斷的天數", format="%d 天", min_value=0, max_value=10
+                )
+            }
+        )
+        
+        st.divider()
+        st.subheader("💡 實戰狙擊建議")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.success("**進場黃金訊號**\n* 尋找排行榜上 **連買 3 天以上**，且累積張數持續放大的股票。\n* 若該股正好也是「股神六星雷達」的 5 星強勢股，勝率極高！")
+        with c2:
+            st.error("**避險與紀律**\n* 投信買超有時是為了作帳，若股價已經飆高且離 5 日線太遠，請勿盲目追高。\n* 一旦發現投信連買中斷轉為賣出，建議立刻獲利了結。")

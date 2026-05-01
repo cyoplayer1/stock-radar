@@ -203,21 +203,31 @@ def diagnose_holding(ticker_in):
 
 # === 6. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 ===
 def get_00981a_holdings_history():
-    """模擬歷史資料：實務上需替換為每日爬蟲抓取的 CSV/DataFrame"""
+    """模擬歷史資料：擴充為 14 檔涵蓋各種買賣情境的股票"""
     dates = pd.date_range(end=pd.Timestamp.today(), periods=5).strftime('%Y-%m-%d').tolist()
     data = []
-    # 智邦: 連續 4 天買進
-    shares_2345 = [1000, 1200, 1500, 1900, 2500] 
-    for d, s in zip(dates, shares_2345): data.append([d, "2345", "智邦", s])
-    # 台光電: 連續 2 天買進
-    shares_2383 = [3000, 3000, 3000, 3500, 4200]
-    for d, s in zip(dates, shares_2383): data.append([d, "2383", "台光電", s])
-    # 台達電: 連賣 (出貨)
-    shares_2308 = [5000, 5200, 5500, 5800, 4500]
-    for d, s in zip(dates, shares_2308): data.append([d, "2308", "台達電", s])
-    # 台積電: 靜止沒動
-    shares_2330 = [8000, 8000, 8000, 8000, 8000]
-    for d, s in zip(dates, shares_2330): data.append([d, "2330", "台積電", s])
+    
+    # 建立多種情境的模擬數據 (格式: 代號, 名稱, [第1天張數, 第2天張數, ..., 第5天張數])
+    mock_data = [
+        ("2317", "鴻海", [1000, 1500, 2000, 3000, 5000]), # 🟢 連買 4 天 (大幅加碼)
+        ("2345", "智邦", [1000, 1200, 1500, 1900, 2500]), # 🟢 連買 4 天
+        ("2383", "台光電", [3000, 3000, 3000, 3500, 4200]), # 🟢 連買 2 天
+        ("3231", "緯創", [2000, 2000, 2000, 2000, 3500]), # 🟢 剛發動買進 1 天
+        ("2454", "聯發科", [500, 500, 600, 800, 1200]),   # 🟢 連買 2 天
+        ("2368", "金像電", [100, 300, 500, 800, 1200]),   # 🟢 連買 4 天
+        ("3017", "奇鋐", [800, 800, 800, 1200, 1800]),    # 🟢 連買 2 天
+        ("3661", "世芯-KY", [200, 200, 200, 200, 400]),   # 🟢 剛發動買進 1 天
+        ("2330", "台積電", [8000, 8000, 8000, 8000, 8000]), # ⚪ 靜止觀望
+        ("3324", "雙鴻", [500, 500, 500, 500, 500]),       # ⚪ 靜止觀望
+        ("2308", "台達電", [5000, 5200, 5500, 5800, 4500]), # 🔴 剛轉賣 1 天
+        ("2382", "廣達", [4000, 4000, 4000, 3000, 2000]),   # 🔴 連賣 2 天
+        ("3034", "聯詠", [1000, 1000, 800, 500, 200]),     # 🔴 連賣 3 天
+        ("2603", "長榮", [5000, 4000, 3000, 2000, 1000]),   # 🔴 連賣 4 天 (強力倒貨)
+    ]
+
+    for ticker, name, shares in mock_data:
+        for d, s in zip(dates, shares):
+            data.append([d, ticker, name, s])
 
     return pd.DataFrame(data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
@@ -261,7 +271,7 @@ def analyze_manager_moves(df):
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio(
     "跳轉頁面", 
-    ["🎯 股神六星雷達系統", "🎯 00981A 策略與資金控管", "🕵️‍♂️ 00981A 經理人跟單雷達"]
+    ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"]
 )
 st.sidebar.markdown("---")
 
@@ -374,64 +384,7 @@ if main_page == "🎯 股神六星雷達系統":
                 else: st.error(f"**建議：** {r['建議']}")
 
 # ==========================================
-# 分頁 2: 🎯 00981A 策略與資金控管
-# ==========================================
-elif main_page == "🎯 00981A 策略與資金控管":
-    st.title("🎯 00981A 買賣邏輯與資金控管雷達")
-    st.markdown("""
-    **【標的簡介】00981A (統一台股增長主動式ETF)**  
-    此模組協助制定嚴格的買進條件、張數試算（加碼邏輯）以及持續買進天數的停扣計畫。
-    """)
-    st.divider()
-
-    current_price_est = 28.30 
-    fc, _ = get_fugle_realtime("00981A")
-    if fc: current_price_est = fc
-
-    st.header("⚙️ 第一步：設定買賣邏輯與資金控管參數")
-    with st.expander("👉 點擊展開/收合參數設定面板", expanded=True):
-        col_logic, col_money = st.columns(2)
-        with col_logic:
-            st.subheader("📊 進出場邏輯")
-            buy_indicator = st.selectbox("1. 買進條件", ["跌破 20MA", "KD <20 金叉", "大盤重挫 > 2%"])
-        with col_money:
-            st.subheader("💰 資金與張數控管")
-            base_shares = st.number_input("2. 基礎買進張數", min_value=1, value=1)
-            max_buy_days = st.number_input("3. 最大連續買進天數", min_value=1, value=5)
-            multiplier = st.slider("4. 金字塔加碼倍數 (1.0為固定張數)", min_value=1.0, max_value=2.0, value=1.5, step=0.1)
-
-    st.divider()
-    st.header("📈 第二步：策略試算與張數推估")
-    simulated_days = 10
-    records, consecutive_buy_days, total_shares, total_cost_est = [], 0, 0, 0
-    
-    for day in range(1, simulated_days + 1):
-        signal_triggered = True if day <= 6 else False
-        if signal_triggered:
-            consecutive_buy_days += 1
-            if consecutive_buy_days <= max_buy_days:
-                shares_to_buy = max(1, int(round(base_shares * (multiplier ** (consecutive_buy_days - 1)))))
-                action = "🟢 建議買進"
-                total_shares += shares_to_buy
-                total_cost_est += shares_to_buy * current_price_est * 1000
-            else:
-                shares_to_buy, action = 0, "🛑 暫停買進 (達上限)"
-        else:
-            consecutive_buy_days, shares_to_buy, action = 0, 0, "⚪ 無訊號"
-            
-        records.append({"天數": f"第 {day} 天", "訊號": "✅ 是" if signal_triggered else "❌ 否", 
-                        "連買天數": consecutive_buy_days, "動作": action, "建議張數": shares_to_buy, "累積庫存": total_shares})
-
-    st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
-    
-    st.subheader(f"📊 模擬結果統計 (以即時股價 {current_price_est} 元估算)")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("策略總累積張數", f"{total_shares} 張")
-    c2.metric("預估總投入資金", f"約 {int(total_cost_est):,} 元")
-    c3.metric("實際動用資金天數", f"{min(6, max_buy_days)} 天")
-
-# ==========================================
-# 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼追蹤)")
@@ -439,7 +392,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     **💡 策略邏輯**：主動式 ETF 必須每日公布持股。我們透過比對「今日」與「昨日」的持股張數，
     就能抓出統一投信經理人正在偷偷**連續加碼**哪些股票，直接跟著主力籌碼上車！
     """)
-    st.info("⚠️ 目前載入為系統內建模擬資料範例。實務上請接上投信每日公布的 CSV 檔案。")
+    st.info("⚠️ 目前載入為系統內建模擬資料範例（14檔熱門標的）。實務上可串接投信每日公布的 CSV 檔案。")
     st.divider()
     
     st.subheader("🔥 今日經理人換股動向排行榜")
@@ -448,13 +401,18 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     raw_df = get_00981a_holdings_history()
     analyzed_df = analyze_manager_moves(raw_df)
     
+    # 使用 dataframe 顯示並特別設定數字欄位的格式
     st.dataframe(
         analyzed_df,
         use_container_width=True,
         hide_index=True,
+        height=550, # 加高表格以容納更多資料
         column_config={
             "今日買賣超(張)": st.column_config.NumberColumn(
                 "今日買賣超(張)", help="正數代表買進，負數代表賣出", format="%d"
+            ),
+            "最新持股張數": st.column_config.NumberColumn(
+                "最新持股張數", format="%d"
             )
         }
     )
@@ -463,6 +421,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.subheader("💡 實戰跟單建議")
     col1, col2 = st.columns(2)
     with col1:
-        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 如果雷達前面判定為 `5星`，可以直接重倉上車。")
+        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 如果切換到「股神六星雷達」判定該股為 `5星`，可以直接重倉上車。")
     with col2:
-        st.error("**避險與出場訊號**\n* 狀態出現 **🔴 經理人倒貨**。\n* 主動式 ETF 換股果決，發現經理人由買轉賣 (負數)，立刻跟著拔檔！")
+        st.error("**避險與出場訊號**\n* 狀態出現 **🔴 經理人倒貨**。\n* 主動式 ETF 換股果決，發現經理人由買轉賣 (負數)，且連續賣出，立刻跟著拔檔！")

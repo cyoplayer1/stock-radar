@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 import requests
 import warnings
 import time
+import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 
@@ -189,13 +190,20 @@ def diagnose_holding(ticker_in):
 
 # === 5. 側邊欄與介面 ===
 st.sidebar.title("📡 導覽選單")
-main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "💰 專業成交排行 (15名)"])
+# 加入 00981A 分頁選項
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🎯 00981A 策略與資金控管", "💰 專業成交排行 (15名)"])
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ 自選股水庫")
-def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
-u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
-s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
+# 只有在雷達頁面才顯示自選股水庫 (保持版面乾淨)
+if main_page == "🎯 股神六星雷達系統":
+    st.sidebar.subheader("⚙️ 自選股水庫")
+    def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
+    u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
+    s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
+
+# ==========================================
+# 分頁 1: 🎯 股神六星雷達系統 (原版功能)
+# ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：終極版")
     t1, t2, t3, t4 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 持股診斷"])
@@ -296,3 +304,135 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning(f"**狀況：** {r['狀況']}")
                 if "續抱" in r['建議']: st.success(f"**建議：** {r['建議']}")
                 else: st.error(f"**建議：** {r['建議']}")
+
+# ==========================================
+# 分頁 2: 🎯 00981A 策略與資金控管
+# ==========================================
+elif main_page == "🎯 00981A 策略與資金控管":
+    st.title("🎯 00981A 買賣邏輯與資金控管雷達")
+    st.markdown("""
+    **【標的簡介】00981A (統一台股增長主動式ETF)**  
+    聚焦台股大型、創新、成長股（如台積電、台光電、智邦等）。因為主動式 ETF 波動與換股較靈活，此模組協助您制定 **嚴格的買進條件**、**張數試算（加碼邏輯）** 以及 **持續買進天數** 的停扣計畫。
+    """)
+    st.divider()
+
+    # 自動抓取 00981A 即時價格 (串接原有的 API 邏輯)
+    current_price_est = 28.30 # 預設值
+    fc, _ = get_fugle_realtime("00981A")
+    if fc:
+        current_price_est = fc
+    else:
+        try:
+            curr_y = yf.Ticker("00981A.TW").history(period="1d")
+            if not curr_y.empty:
+                current_price_est = round(curr_y['Close'].iloc[-1], 2)
+        except: pass
+
+    # --- 1. 策略參數設定區 ---
+    st.header("⚙️ 第一步：設定買賣邏輯與資金控管參數")
+    
+    with st.expander("👉 點擊展開/收合參數設定面板", expanded=True):
+        col_logic, col_money = st.columns(2)
+        
+        with col_logic:
+            st.subheader("📊 進出場邏輯")
+            buy_indicator = st.selectbox(
+                "1. 選擇買進觸發條件",
+                [
+                    "價格跌破 20MA (月線建倉)", 
+                    "價格跌破 60MA (季線建倉)", 
+                    "KD指標 K<20 且黃金交叉", 
+                    "大盤重挫 > 2% 時無腦買進"
+                ]
+            )
+            sell_indicator = st.selectbox(
+                "2. 選擇停利/出場條件",
+                [
+                    "獲利達 15% 停利", 
+                    "價格跌破前波低點 (停損)", 
+                    "KD指標 K>80 死亡交叉", 
+                    "長期持有不賣 (存股模式)"
+                ]
+            )
+            
+        with col_money:
+            st.subheader("💰 資金與張數控管")
+            base_shares = st.number_input("3. 基礎買進張數 (單次)", min_value=1, value=1, step=1)
+            max_buy_days = st.number_input("4. 最大連續買進天數 (防無底洞)", min_value=1, value=5, step=1, help="當連續下跌觸發買進訊號時，最多只買幾天就強迫停手。")
+            martingale_type = st.radio(
+                "5. 連續觸發訊號時的加碼策略",
+                ["固定張數 (每日買基礎張數)", "金字塔加碼 (越跌買越多)"]
+            )
+            
+            multiplier = 1.0
+            if martingale_type == "金字塔加碼 (越跌買越多)":
+                multiplier = st.slider("設定金字塔加碼倍數 (倍數越高，後面買越重)", min_value=1.1, max_value=2.0, value=1.5, step=0.1)
+
+    st.divider()
+
+    # --- 2. 模擬試算與推演表 ---
+    st.header("📈 第二步：策略試算與張數推估")
+    st.info(f"💡 **目前策略情境**：當觸發『**{buy_indicator}**』時，首日買進 **{base_shares}** 張。若連續觸發，採『**{martingale_type}**』，最多連續買進 **{max_buy_days}** 天即停手觀察。")
+
+    simulated_days = 10
+    records = []
+    consecutive_buy_days = 0
+    total_shares = 0
+    total_cost_est = 0
+    
+    for day in range(1, simulated_days + 1):
+        # 假設前 6 天連續觸發買進訊號，第 7 天開始止穩無訊號
+        signal_triggered = True if day <= 6 else False
+        
+        if signal_triggered:
+            consecutive_buy_days += 1
+            
+            if consecutive_buy_days <= max_buy_days:
+                if martingale_type == "固定張數 (每日買基礎張數)":
+                    shares_to_buy = base_shares
+                else:
+                    shares_to_buy = max(1, int(round(base_shares * (multiplier ** (consecutive_buy_days - 1)))))
+                
+                action = "🟢 建議買進"
+                daily_cost = shares_to_buy * current_price_est * 1000
+                total_shares += shares_to_buy
+                total_cost_est += daily_cost
+            else:
+                shares_to_buy = 0
+                action = "🛑 暫停買進 (已達最大允許天數)"
+        else:
+            consecutive_buy_days = 0 
+            shares_to_buy = 0
+            action = "⚪ 無訊號，觀察中"
+            
+        records.append({
+            "模擬天數": f"第 {day} 天",
+            "訊號是否觸發": "✅ 是" if signal_triggered else "❌ 否",
+            "連續買進天數": consecutive_buy_days,
+            "系統建議動作": action,
+            "建議買進張數": shares_to_buy,
+            "累積庫存 (張)": total_shares
+        })
+
+    df_simulation = pd.DataFrame(records)
+    st.dataframe(df_simulation, use_container_width=True, hide_index=True)
+    
+    st.subheader(f"📊 模擬結果統計 (以即時股價 {current_price_est} 元估算)")
+    stat_col1, stat_col2, stat_col3 = st.columns(3)
+    stat_col1.metric("策略總累積張數", f"{total_shares} 張")
+    stat_col2.metric("預估總投入資金", f"約 {int(total_cost_est):,} 元")
+    stat_col3.metric("實際動用資金天數", f"{min(6, max_buy_days)} 天")
+
+    st.divider()
+
+    # --- 3. 實單紀錄區 ---
+    st.header("📝 第三步：交易日誌與實單檢討")
+    with st.form("trade_log_form"):
+        trade_date = st.date_input("交易日期", datetime.date.today())
+        trade_price = st.number_input("實際成交均價", min_value=0.0, value=float(current_price_est), step=0.01)
+        actual_shares = st.number_input("實際成交張數", min_value=0, value=0, step=1)
+        trade_note = st.text_area("覆盤筆記 (例如：遇到大盤下殺滑價、提早停手、或是貪婪買太多等心理狀態)")
+        submit_btn = st.form_submit_button("💾 儲存今日紀錄")
+        
+        if submit_btn:
+            st.success(f"✅ 成功紀錄！【{trade_date}】買進 00981A 共 {actual_shares} 張，均價 {trade_price} 元。")

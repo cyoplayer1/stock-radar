@@ -204,7 +204,6 @@ def diagnose_holding(ticker_in):
 
 # === 6. 🐳 大戶爬蟲與 SQLite 整合引擎 (內建版) ===
 def fetch_and_save_whale_data(db_name="whale_tracker.db"):
-    """直接在網頁背景執行爬蟲並建立資料庫"""
     url = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
     data = safe_get_json(url)
     
@@ -231,7 +230,7 @@ def fetch_and_save_whale_data(db_name="whale_tracker.db"):
     except Exception as e:
         return False, str(e)
 
-@st.cache_data(ttl=60) # 快取 1 分鐘
+@st.cache_data(ttl=60)
 def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
     if not os.path.exists(db_name): return None 
     try:
@@ -265,7 +264,6 @@ def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
 
 # === 7. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 ===
 def get_00981a_holdings_history():
-    """模擬 14 檔涵蓋各種買賣情境的股票"""
     dates = pd.date_range(end=pd.Timestamp.today(), periods=5).strftime('%Y-%m-%d').tolist()
     data = []
     mock_data = [
@@ -442,14 +440,13 @@ elif main_page == "🐳 大戶(投信)連買狙擊雷達":
     """)
     st.divider()
     
-    # --- ☁️ 雲端無痛爬蟲按鈕 ---
     if st.button("🔄 點我手動更新今日大戶籌碼 (更新資料庫)", type="primary"):
         with st.spinner("🚀 正在前往證交所抓取最新籌碼，並建立資料庫，請稍候..."):
             success, msg = fetch_and_save_whale_data()
             if success:
                 st.success(f"✅ 更新成功！{msg}")
-                time.sleep(1) # 暫停一下讓使用者看到成功訊息
-                st.rerun() # 自動重整網頁載入新數據
+                time.sleep(1) 
+                st.rerun() 
             else:
                 st.error(f"❌ 更新失敗：{msg}")
     
@@ -458,7 +455,7 @@ elif main_page == "🐳 大戶(投信)連買狙擊雷達":
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("⚙️ 篩選條件設定")
-        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, help="如果是第一天建立資料庫，請設定為 1。累積幾天後建議設為 2 或 3。")
+        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, help="累積幾天後建議設為 2 或 3。")
     
     with col2:
         st.info("⚠️ 如果下方顯示錯誤或沒資料，請點擊上方的紅色按鈕「更新今日大戶籌碼」來建立資料庫。")
@@ -470,7 +467,7 @@ elif main_page == "🐳 大戶(投信)連買狙擊雷達":
     if analyzed_df is None:
         st.error("❌ 找不到資料庫檔案 (`whale_tracker.db`)！請先點擊上方的更新按鈕來抓取第一筆資料。")
     elif analyzed_df.empty:
-        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。請確認今天盤後是否已更新，或降低篩選天數。")
+        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。請確認今天盤後是否已更新。")
     else:
         st.dataframe(
             analyzed_df, use_container_width=True, hide_index=True, height=600, 
@@ -484,19 +481,42 @@ elif main_page == "🐳 大戶(投信)連買狙擊雷達":
 # 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
-    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼追蹤)")
+    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (籌碼與六星共振)")
     st.markdown("""
-    **💡 策略邏輯**：主動式 ETF 必須每日公布持股。我們透過比對「今日」與「昨日」的持股張數，
-    就能抓出統一投信經理人正在偷偷**連續加碼**哪些股票，直接跟著主力籌碼上車！
+    **💡 策略邏輯**：比對「今日」與「昨日」的持股，抓出統一投信經理人正在連續加碼的股票。
+    系統會**自動對接「股神六星雷達」**，若發現主力連買且星等極高，這就是最強的黃金上車訊號！
     """)
     st.info("⚠️ 目前載入為系統內建模擬資料範例（14檔熱門標的）。實務上可串接投信每日公布的 CSV 檔案。")
     st.divider()
     
-    st.subheader("🔥 今日經理人換股動向排行榜")
+    st.subheader("🔥 今日經理人換股動向排行榜 (含雷達星等)")
     
+    # 執行籌碼分析
     raw_df = get_00981a_holdings_history()
     analyzed_df = analyze_manager_moves(raw_df)
     
+    # === 🚀 自動幫排行榜上的股票打上「六星雷達」 ===
+    with st.spinner("✨ 正在為經理人持股進行六星雷達掃描 (這會花幾秒鐘的時間)..."):
+        inst_map = get_inst_data()
+        hot_list = get_hot_rank_ids()
+        
+        def get_star(ticker):
+            res = analyze_stock_score(ticker, inst_map, hot_list)
+            if res: return res['星等']
+            return "休息" # 若分數不夠或是資料不足顯示休息
+            
+        # 多執行緒並發掃描 14 檔股票
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            futs = {ex.submit(get_star, ticker): ticker for ticker in analyzed_df['代號']}
+            star_dict = {}
+            for f in as_completed(futs):
+                ticker = futs[f]
+                star_dict[ticker] = f.result()
+                
+        # 將「六星雷達」欄位安插在「股票名稱」的後面 (位置 index 2)
+        analyzed_df.insert(2, '六星雷達', analyzed_df['代號'].map(star_dict))
+
+    # 顯示出最終擁有星星的 DataFrame
     st.dataframe(
         analyzed_df, use_container_width=True, hide_index=True, height=550, 
         column_config={
@@ -509,6 +529,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.subheader("💡 實戰跟單建議")
     col1, col2 = st.columns(2)
     with col1:
-        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 如果切換到「股神六星雷達」判定該股為 `5星`，可以直接重倉上車。")
+        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 且右側的 **「六星雷達」** 顯示 `⭐⭐⭐⭐⭐`，直接重倉上車！")
     with col2:
         st.error("**避險與出場訊號**\n* 狀態出現 **🔴 經理人倒貨**。\n* 主動式 ETF 換股果決，發現經理人由買轉賣 (負數)，且連續賣出，立刻跟著拔檔！")

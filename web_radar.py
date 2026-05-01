@@ -23,7 +23,7 @@ HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
 # === 2. 🛡️ 安全連線防護機制 ===
-def safe_get_json(url, headers, max_retries=3):
+def safe_get_json(url, headers=HEADERS, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False)
@@ -202,8 +202,36 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🐳 SQLite 資料庫讀取邏輯 (全市場大戶跟單) ===
-@st.cache_data(ttl=600)
+# === 6. 🐳 大戶爬蟲與 SQLite 整合引擎 (內建版) ===
+def fetch_and_save_whale_data(db_name="whale_tracker.db"):
+    """直接在網頁背景執行爬蟲並建立資料庫"""
+    url = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
+    data = safe_get_json(url)
+    
+    if not data or 'data' not in data: return False, "今日無數據或抓取失敗 (可能是假日或尚未更新)"
+    
+    try:
+        columns = data['fields']
+        df = pd.DataFrame(data['data'], columns=columns)
+        df_clean = df[['證券代號', '證券名稱', '投信買賣超股數']].copy()
+        df_clean['投信買賣超(張)'] = df_clean['投信買賣超股數'].str.replace(',', '').astype(int) / 1000
+        df_clean['日期'] = datetime.date.today().strftime("%Y-%m-%d")
+        result_df = df_clean[['日期', '證券代號', '證券名稱', '投信買賣超(張)']]
+        
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        cursor.execute('CREATE TABLE IF NOT EXISTS trust_net_buy (日期 TEXT, 證券代號 TEXT, 證券名稱 TEXT, "投信買賣超(張)" REAL)')
+        
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        cursor.execute("DELETE FROM trust_net_buy WHERE 日期=?", (today_str,))
+        result_df.to_sql('trust_net_buy', conn, if_exists='append', index=False)
+        conn.commit()
+        conn.close()
+        return True, f"成功寫入 {len(result_df)} 筆籌碼資料！"
+    except Exception as e:
+        return False, str(e)
+
+@st.cache_data(ttl=60) # 快取 1 分鐘
 def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
     if not os.path.exists(db_name): return None 
     try:
@@ -235,7 +263,7 @@ def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1):
         st.error(f"讀取資料庫錯誤: {e}")
         return None
 
-# === 7. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 (模擬版) ===
+# === 7. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 ===
 def get_00981a_holdings_history():
     """模擬 14 檔涵蓋各種買賣情境的股票"""
     dates = pd.date_range(end=pd.Timestamp.today(), periods=5).strftime('%Y-%m-%d').tolist()
@@ -323,7 +351,6 @@ if main_page == "🎯 股神六星雷達系統":
                     pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
             
-            # 🏆 包含「排名」機制的顯示邏輯
             if res:
                 df = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False])
                 df.reset_index(drop=True, inplace=True)
@@ -410,28 +437,40 @@ if main_page == "🎯 股神六星雷達系統":
 elif main_page == "🐳 大戶(投信)連買狙擊雷達":
     st.title("🐳 投信連買狙擊雷達 (真實數據)")
     st.markdown("""
-    **💡 運作邏輯**：此模組會讀取後端每日抓取的 `whale_tracker.db` 資料庫。
-    只要投信大戶連續好幾天大買同一檔股票，通常代表背後有極強的基本面支撐或換股潮，跟著上車勝率極高！
+    **💡 運作邏輯**：此模組內建爬蟲引擎，點擊下方按鈕即可自動去證交所抓取資料並建立資料庫。
+    只要投信大戶連續好幾天大買同一檔股票，跟著上車勝率極高！
     """)
     st.divider()
     
+    # --- ☁️ 雲端無痛爬蟲按鈕 ---
+    if st.button("🔄 點我手動更新今日大戶籌碼 (更新資料庫)", type="primary"):
+        with st.spinner("🚀 正在前往證交所抓取最新籌碼，並建立資料庫，請稍候..."):
+            success, msg = fetch_and_save_whale_data()
+            if success:
+                st.success(f"✅ 更新成功！{msg}")
+                time.sleep(1) # 暫停一下讓使用者看到成功訊息
+                st.rerun() # 自動重整網頁載入新數據
+            else:
+                st.error(f"❌ 更新失敗：{msg}")
+    
+    st.divider()
+
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("⚙️ 篩選條件設定")
-        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=2, step=1, help="過濾掉只買一天的雜訊，建議設定 2 或 3 天以上。")
+        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1, help="如果是第一天建立資料庫，請設定為 1。累積幾天後建議設為 2 或 3。")
     
     with col2:
-        st.info("⚠️ **系統提示**：此頁面依賴後端爬蟲 `whale_engine.py` 每日更新。若查無資料，請確認你今天盤後有執行過後端引擎。")
+        st.info("⚠️ 如果下方顯示錯誤或沒資料，請點擊上方的紅色按鈕「更新今日大戶籌碼」來建立資料庫。")
         
-    st.divider()
     st.subheader(f"🔥 全市場投信連買排行榜 (連買 ≥ {min_days} 天)")
     
     analyzed_df = get_whale_consecutive_buys(min_days=min_days)
     
     if analyzed_df is None:
-        st.error("❌ 找不到資料庫檔案 (`whale_tracker.db`)！請先在終端機執行 `python whale_engine.py` 來建立並抓取第一筆資料。")
+        st.error("❌ 找不到資料庫檔案 (`whale_tracker.db`)！請先點擊上方的更新按鈕來抓取第一筆資料。")
     elif analyzed_df.empty:
-        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。可能是資料累積天數不夠，請多執行幾天後端爬蟲。")
+        st.warning(f"📉 目前資料庫中沒有連續買進達 {min_days} 天以上的股票。請確認今天盤後是否已更新，或降低篩選天數。")
     else:
         st.dataframe(
             analyzed_df, use_container_width=True, hide_index=True, height=600, 
@@ -440,14 +479,6 @@ elif main_page == "🐳 大戶(投信)連買狙擊雷達":
                 "連續天數": st.column_config.ProgressColumn("連續天數", format="%d 天", min_value=0, max_value=10)
             }
         )
-        
-        st.divider()
-        st.subheader("💡 實戰狙擊建議")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.success("**進場黃金訊號**\n* 尋找排行榜上 **連買 3 天以上**，且累積張數持續放大的股票。\n* 若該股正好也是「股神六星雷達」的 5 星強勢股，勝率極高！")
-        with c2:
-            st.error("**避險與紀律**\n* 投信買超有時是為了作帳，若股價已經飆高且離 5 日線太遠，請勿盲目追高。\n* 一旦發現投信連買中斷轉為賣出，建議立刻獲利了結。")
 
 # ==========================================
 # 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達

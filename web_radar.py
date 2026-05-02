@@ -21,7 +21,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 (修正快取衝突版) ===
+# === 2. 🛡️ 安全連線防護機制 (無 UI 快取衝突版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -29,7 +29,6 @@ def safe_get_json(url, headers, max_retries=3):
             response.raise_for_status() 
             return response.json()
         except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
-            # 🛑 已移除 st.toast，避免引發 Streamlit 的 CacheReplayClosureError 崩潰
             time.sleep(2)
         except ValueError:
             break
@@ -252,6 +251,7 @@ def get_00981a_holdings_history(force_refresh=False):
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
         dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         
+        # 精心設計的 15 檔多空測試名單
         mock_scenarios = [
             ("2317", "鴻海", [1000, 1500, 2000, 3000]),
             ("3231", "緯創", [2000, 2000, 2000, 3500]),
@@ -380,7 +380,7 @@ if main_page == "🎯 股神六星雷達系統":
                         df1 = pd.DataFrame(table['data'], columns=table['fields'])
                         df1['值'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
                         d15 = df1.sort_values('值', ascending=False).head(15).copy()
-                        d15['金額'] = d15['值'].apply(lambda x: f"{int(x/100000000):,} 億")
+                        d15['金額'] = d15['值'].apply(lambda x: f f"{int(x/100000000):,} 億")
                         st.table(d15[['證券代號','證券名稱','金額']].reset_index(drop=True))
                         break
         with c2:
@@ -453,7 +453,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         force_refresh = st.button("🔄 強制重新抓取今日籌碼", use_container_width=True)
     
     st.divider()
-    st.subheader("🔥 經理人持股 × 六星技術面共振榜")
     
     # 執行籌碼分析
     raw_df = get_00981a_holdings_history(force_refresh=force_refresh)
@@ -467,17 +466,29 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             
             star_dict = {}
             with ThreadPoolExecutor(max_workers=5) as ex:
-                # 針對經理人清單內的每一檔股票，送進六星雷達評分
                 futs = {ex.submit(analyze_stock_score, str(t), inst_map, hot_list): t for t in analyzed_df['代號']}
                 for f in as_completed(futs):
                     t = futs[f]
                     res = f.result()
-                    # 如果有算出來，塞入星星；如果沒有(量不夠或均線不對)，則顯示休息
                     star_dict[t] = res['星等'] if res and res['星等'] != "休息" else "☁️ 盤整/休息"
             
-            # 將算好的六星評等，精準插入到 dataframe 的第三個欄位
             analyzed_df.insert(2, '六星技術評等', analyzed_df['代號'].map(star_dict))
             
+        # 📊 戰情總覽儀表板
+        st.subheader("📊 盤面戰情總覽")
+        buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
+        sell_count = analyzed_df[analyzed_df['動向狀態'].str.contains('倒貨|賣')].shape[0]
+        # 計算買進且星星數>=4的標的
+        star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('⭐') >= 4)].shape[0]
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🔥 主力連續買進標的", f"{buy_count} 檔")
+        m2.metric("🧊 經理人倒貨調節標的", f"{sell_count} 檔")
+        m3.metric("⭐ 觸發雙引擎共振標的", f"{star_count} 檔", help="同時被主力連續買進，且技術面達4顆星以上的強勢股！")
+        
+        st.divider()
+        st.subheader("🔥 經理人持股 × 六星技術面共振榜")
+        
         # 顯示雙引擎共振表格
         st.dataframe(
             analyzed_df,

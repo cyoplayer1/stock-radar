@@ -21,7 +21,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 ===
+# === 2. 🛡️ 安全連線防護機制 (修正快取衝突版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -29,7 +29,7 @@ def safe_get_json(url, headers, max_retries=3):
             response.raise_for_status() 
             return response.json()
         except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
-            st.toast(f"⚠️ 連線不穩，正在進行第 {attempt + 1} 次重試...", icon="🔄")
+            # 🛑 已移除 st.toast，避免引發 Streamlit 的 CacheReplayClosureError 崩潰
             time.sleep(2)
         except ValueError:
             break

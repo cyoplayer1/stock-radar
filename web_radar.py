@@ -14,7 +14,6 @@ import os
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
-# 🛡️ 忽略因為跳過 SSL 驗證產生的警告訊息
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
@@ -204,16 +203,14 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (防呆強化版) ===
+# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (火力全開版) ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
     
-    # 這裡預設使用證交所 ETF8 API，若找不到資料，可替換為其他投信官網解析邏輯
     url_twse = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
     res = safe_get_json(url_twse, HEADERS)
     
-    # 🕵️‍♂️ 【開發者除錯監控】將 API 回應顯示在側邊欄
     with st.sidebar.expander("🛠️ API 封包監控 (除錯專用)"):
         st.write(f"正在請求: {etf_code}")
         st.json(res)
@@ -225,7 +222,7 @@ def fetch_today_holdings_from_api(etf_code="00981A"):
             shares = int(row[2].replace(',', '')) // 1000 
             new_data.append([today, ticker, name, shares])
     else:
-        st.sidebar.error(f"⚠️ 證交所 API 目前找不到 {etf_code} 的資料。")
+        st.sidebar.error(f"⚠️ 真實 API 目前找不到 {etf_code} 的資料，將啟動火力全開測試引擎。")
         
     return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
@@ -238,11 +235,9 @@ def get_00981a_holdings_history(force_refresh=False):
     else:
         df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
         
-    # 如果已經有今天的資料且沒有強制更新，直接回傳
     if not df_history.empty and today_str in df_history['日期'].values and not force_refresh:
         return df_history
         
-    # 如果強制更新，先清掉今天的舊資料
     if force_refresh and not df_history.empty:
         df_history = df_history[df_history['日期'] != today_str]
             
@@ -254,23 +249,38 @@ def get_00981a_holdings_history(force_refresh=False):
         df_history.to_csv(db_path, index=False)
         st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
     elif df_history.empty:
-        # 🕵️‍♂️ 【防呆機制】如果連歷史資料都沒有，且 API 失敗，塞入一筆「測試資料」避免畫面崩潰
-        st.info("💡 系統自動載入測試資料以供預覽版面 (因為目前 API 抓不到真實數據)。這可確保畫面不會一片空白。")
-        dummy_data = pd.DataFrame([
-            [today_str, "2330", "台積電 (測試)", 8500],
-            [today_str, "2317", "鴻海 (測試)", 3200],
-            [today_str, "2454", "聯發科 (測試)", 1500]
-        ], columns=['日期', '代號', '股票名稱', '持有張數'])
+        # 🔥🔥🔥 火力全開測試引擎：自動生成 15 檔股票、連續 4 天的逼真動態資料 🔥🔥🔥
+        st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入 15 檔模擬持股與 4 天連續籌碼動向。")
         
-        # 為了展示買賣超，我們假造一個「昨天」的資料讓系統有東西可以相減
-        yesterday_str = (datetime.datetime.today() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-        dummy_yesterday = pd.DataFrame([
-            [yesterday_str, "2330", "台積電 (測試)", 8000], # 今天加碼了 500
-            [yesterday_str, "2317", "鴻海 (測試)", 3500],   # 今天倒貨了 300
-            [yesterday_str, "2454", "聯發科 (測試)", 1500]  # 持平
-        ], columns=['日期', '代號', '股票名稱', '持有張數'])
+        # 產生 T-3, T-2, T-1, T0(今天) 共四天的日期字串
+        dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         
-        return pd.concat([dummy_yesterday, dummy_data], ignore_index=True)
+        # 逼真的劇本：代號, 名稱, [大前天張數, 前天張數, 昨天張數, 今天張數]
+        mock_scenarios = [
+            ("2317", "鴻海", [1000, 1500, 2000, 3000]),   # 🟢 連買 3 天 (強烈加碼)
+            ("3231", "緯創", [2000, 2000, 2000, 3500]),   # 🟢 剛買 1 天 (突襲發動)
+            ("2383", "台光電", [3000, 3000, 3500, 4200]), # 🟢 連買 2 天
+            ("2368", "金像電", [100, 300, 500, 800]),     # 🟢 連買 3 天 (偷吃貨)
+            ("3017", "奇鋐", [800, 800, 1200, 1800]),     # 🟢 連買 2 天
+            ("2345", "智邦", [1000, 1200, 1500, 1900]),   # 🟢 連買 3 天
+            ("3533", "嘉澤", [600, 600, 700, 900]),       # 🟢 連買 2 天
+            ("2330", "台積電", [8000, 8000, 8000, 8000]), # ⚪ 靜止觀望 (不動如山)
+            ("2454", "聯發科", [1500, 1500, 1500, 1500]), # ⚪ 靜止觀望
+            ("3324", "雙鴻", [500, 500, 500, 500]),       # ⚪ 靜止觀望
+            ("2308", "台達電", [5000, 5200, 5500, 4500]), # 🔴 剛轉賣 1 天 (高檔結帳)
+            ("2382", "廣達", [4000, 4000, 3000, 2000]),   # 🔴 連賣 2 天
+            ("3034", "聯詠", [1000, 1000, 800, 500]),     # 🔴 連賣 2 天
+            ("2603", "長榮", [5000, 4000, 3000, 2000]),   # 🔴 連賣 3 天 (無情倒貨)
+            ("3661", "世芯-KY", [400, 400, 400, 200]),    # 🔴 剛賣 1 天
+        ]
+        
+        dummy_rows = []
+        for ticker, name, shares in mock_scenarios:
+            for i, d in enumerate(dates):
+                # 為了避免假資料存進真資料庫，我們只在記憶體內回傳，不存檔
+                dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
+                
+        return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
         
     return df_history
 
@@ -459,7 +469,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df,
             use_container_width=True,
             hide_index=True,
-            height=300, 
+            height=550, # 高度拉高，完美展示 15 檔滿編陣容
             column_config={
                 "今日買賣超(張)": st.column_config.NumberColumn(
                     "今日買賣超(張)", help="正數代表買進，負數代表賣出", format="%d"

@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 import os
-import json
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
@@ -31,9 +30,11 @@ def safe_get_json(url, headers, max_retries=3):
             response.raise_for_status() 
             return response.json()
         except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
-            st.toast(f"⚠️ 證交所連線不穩，正在進行第 {attempt + 1} 次重試...", icon="🔄")
+            st.toast(f"⚠️ 連線不穩，正在進行第 {attempt + 1} 次重試...", icon="🔄")
             time.sleep(2)
         except ValueError:
+            break
+        except Exception as e:
             break
     return {}
 
@@ -203,62 +204,73 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 (即時抓取與儲存版) ===
+# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (防呆強化版) ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
-    """
-    從證交所或投信官網抓取『今日』的最新持股。
-    (此處以常見的證交所 ETF8 API 為結構範例。)
-    """
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
     
-    try:
-        url = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
-        res = safe_get_json(url, HEADERS)
+    # 這裡預設使用證交所 ETF8 API，若找不到資料，可替換為其他投信官網解析邏輯
+    url_twse = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
+    res = safe_get_json(url_twse, HEADERS)
+    
+    # 🕵️‍♂️ 【開發者除錯監控】將 API 回應顯示在側邊欄
+    with st.sidebar.expander("🛠️ API 封包監控 (除錯專用)"):
+        st.write(f"正在請求: {etf_code}")
+        st.json(res)
         
-        if res and 'data' in res:
-            for row in res['data']:
-                ticker = str(row[0]).strip()
-                name = str(row[1]).strip()
-                shares = int(row[2].replace(',', '')) // 1000 
-                
-                new_data.append([today, ticker, name, shares])
-                
-    except Exception as e:
-        st.toast(f"⚠️ 即時持股抓取失敗: {e}", icon="❌")
+    if res and 'data' in res and len(res['data']) > 0:
+        for row in res['data']:
+            ticker = str(row[0]).strip()
+            name = str(row[1]).strip()
+            shares = int(row[2].replace(',', '')) // 1000 
+            new_data.append([today, ticker, name, shares])
+    else:
+        st.sidebar.error(f"⚠️ 證交所 API 目前找不到 {etf_code} 的資料。")
         
     return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
-def get_00981a_holdings_history():
-    """
-    獲取歷史持股紀錄。
-    每天執行時，會檢查今天是否已經抓過，若無則抓取並存入本地 CSV 累積歷史資料。
-    """
+def get_00981a_holdings_history(force_refresh=False):
     db_path = "00981A_holdings_db.csv"
     today_str = datetime.datetime.today().strftime('%Y-%m-%d')
     
-    # 1. 讀取本地端累積的歷史資料
     if os.path.exists(db_path):
         df_history = pd.read_csv(db_path)
     else:
         df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
         
-    # 2. 檢查今天是否已經抓取過，如果抓過了就直接回傳歷史資料庫
-    if not df_history.empty and today_str in df_history['日期'].values:
+    # 如果已經有今天的資料且沒有強制更新，直接回傳
+    if not df_history.empty and today_str in df_history['日期'].values and not force_refresh:
         return df_history
         
-    # 3. 若今天尚未抓取，啟動即時爬蟲抓取今日最新資料
-    with st.spinner("🔄 正在獲取經理人今日最新持股..."):
+    # 如果強制更新，先清掉今天的舊資料
+    if force_refresh and not df_history.empty:
+        df_history = df_history[df_history['日期'] != today_str]
+            
+    with st.spinner("🔄 正在從連線獲取經理人今日最新持股..."):
         df_today = fetch_today_holdings_from_api("00981A")
         
-    # 4. 如果今天有抓到新資料，合併進歷史資料庫並存檔
     if not df_today.empty:
         df_history = pd.concat([df_history, df_today], ignore_index=True)
         df_history.to_csv(db_path, index=False)
         st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
+    elif df_history.empty:
+        # 🕵️‍♂️ 【防呆機制】如果連歷史資料都沒有，且 API 失敗，塞入一筆「測試資料」避免畫面崩潰
+        st.info("💡 系統自動載入測試資料以供預覽版面 (因為目前 API 抓不到真實數據)。這可確保畫面不會一片空白。")
+        dummy_data = pd.DataFrame([
+            [today_str, "2330", "台積電 (測試)", 8500],
+            [today_str, "2317", "鴻海 (測試)", 3200],
+            [today_str, "2454", "聯發科 (測試)", 1500]
+        ], columns=['日期', '代號', '股票名稱', '持有張數'])
         
-    if df_history.empty:
-        return pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
+        # 為了展示買賣超，我們假造一個「昨天」的資料讓系統有東西可以相減
+        yesterday_str = (datetime.datetime.today() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+        dummy_yesterday = pd.DataFrame([
+            [yesterday_str, "2330", "台積電 (測試)", 8000], # 今天加碼了 500
+            [yesterday_str, "2317", "鴻海 (測試)", 3500],   # 今天倒貨了 300
+            [yesterday_str, "2454", "聯發科 (測試)", 1500]  # 持平
+        ], columns=['日期', '代號', '股票名稱', '持有張數'])
+        
+        return pd.concat([dummy_yesterday, dummy_data], ignore_index=True)
         
     return df_history
 
@@ -300,6 +312,7 @@ def analyze_manager_moves(df):
         })
         
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
+
 
 # === 7. 側邊欄與介面 ===
 st.sidebar.title("📡 導覽選單")
@@ -426,13 +439,18 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     **💡 策略邏輯**：主動式 ETF 必須每日公布持股。我們透過比對「今日」與「昨日」的持股張數，
     就能抓出統一投信經理人正在偷偷**連續加碼**哪些股票，直接跟著主力籌碼上車！
     """)
-    st.info("🔄 系統將每日自動抓取最新持股，並與本地資料庫比對計算買賣超變化。")
-    st.divider()
     
+    col_info, col_btn = st.columns([3, 1])
+    with col_info:
+        st.info("🔄 系統將每日自動抓取最新持股，並與本地資料庫比對計算買賣超變化。")
+    with col_btn:
+        force_refresh = st.button("🔄 強制重新抓取今日籌碼", use_container_width=True)
+    
+    st.divider()
     st.subheader("🔥 今日經理人換股動向排行榜")
     
-    # 執行籌碼分析 (即時爬蟲 + 本地資料庫比對)
-    raw_df = get_00981a_holdings_history()
+    # 執行籌碼分析 (即時爬蟲 + 本地資料庫比對 + 強制更新開關)
+    raw_df = get_00981a_holdings_history(force_refresh=force_refresh)
     analyzed_df = analyze_manager_moves(raw_df)
     
     if not analyzed_df.empty:
@@ -441,7 +459,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df,
             use_container_width=True,
             hide_index=True,
-            height=550, 
+            height=300, 
             column_config={
                 "今日買賣超(張)": st.column_config.NumberColumn(
                     "今日買賣超(張)", help="正數代表買進，負數代表賣出", format="%d"

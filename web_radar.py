@@ -21,7 +21,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 (無 UI 快取衝突版) ===
+# === 2. 🛡️ 安全連線防護機制 ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -70,6 +70,18 @@ def get_fugle_realtime(symbol):
             return data.get('closePrice'), data.get('total', {}).get('tradeVolume', 0)
     except: pass
     return None, None
+
+def fetch_fast_price(symbol):
+    """快速備用獲取股價函數"""
+    fc, _ = get_fugle_realtime(str(symbol))
+    if fc: return fc
+    try:
+        df = yf.Ticker(f"{symbol}.TW").history(period="1d")
+        if not df.empty: return round(df['Close'].iloc[-1], 2)
+        df = yf.Ticker(f"{symbol}.TWO").history(period="1d")
+        if not df.empty: return round(df['Close'].iloc[-1], 2)
+    except: pass
+    return "---"
 
 @st.cache_data(ttl=3600)
 def get_inst_data():
@@ -251,7 +263,6 @@ def get_00981a_holdings_history(force_refresh=False):
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
         dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         
-        # 精心設計的 15 檔多空測試名單
         mock_scenarios = [
             ("2317", "鴻海", [1000, 1500, 2000, 3000]),
             ("3231", "緯創", [2000, 2000, 2000, 3500]),
@@ -442,13 +453,13 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (雙引擎共振版)")
     st.markdown("""
     **💡 雙引擎共振策略**：
-    我們不僅追蹤經理人「連續買進」的籌碼動向，系統還會自動呼叫【股神六星雷達】去檢驗這些標的。
+    我們不僅追蹤經理人「連續買進」的籌碼動向，系統還會自動抓取**最新股價**，並呼叫【股神六星雷達】去檢驗標的。
     只要看到經理人狂買，且六星評等亮出 **4 顆星以上**，就是勝率極高的起漲點！
     """)
     
     col_info, col_btn = st.columns([3, 1])
     with col_info:
-        st.info("🔄 系統每日比對籌碼變化，並在背景執行技術面六星掃描。")
+        st.info("🔄 系統每日比對籌碼變化，並在背景執行技術面六星掃描與即時報價。")
     with col_btn:
         force_refresh = st.button("🔄 強制重新抓取今日籌碼", use_container_width=True)
     
@@ -459,26 +470,37 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     analyzed_df = analyze_manager_moves(raw_df)
     
     if not analyzed_df.empty:
-        # 🚀 啟動六星聯動掃描引擎
-        with st.spinner("⚡ 正在呼叫【股神六星雷達】進行技術面共振掃描..."):
+        # 🚀 啟動六星聯動掃描與即時報價引擎
+        with st.spinner("⚡ 正在獲取最新股價，並呼叫【股神六星雷達】進行技術面掃描..."):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
             
             star_dict = {}
+            price_dict = {}
+            
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = {ex.submit(analyze_stock_score, str(t), inst_map, hot_list): t for t in analyzed_df['代號']}
                 for f in as_completed(futs):
                     t = futs[f]
                     res = f.result()
-                    star_dict[t] = res['星等'] if res and res['星等'] != "休息" else "☁️ 盤整/休息"
+                    
+                    if res:
+                        # 成功經過六星掃描
+                        star_dict[t] = res['星等'] if res['星等'] != "休息" else "☁️ 盤整/休息"
+                        price_dict[t] = res['收盤']
+                    else:
+                        # 量能不足或歷史不夠，六星引擎略過，但我們依然要抓最新股價
+                        star_dict[t] = "☁️ 盤整/休息"
+                        price_dict[t] = fetch_fast_price(t)
             
-            analyzed_df.insert(2, '六星技術評等', analyzed_df['代號'].map(star_dict))
+            # 將算好的股價與六星評等，精準插入到 dataframe 中
+            analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))
+            analyzed_df.insert(3, '六星技術評等', analyzed_df['代號'].map(star_dict))
             
         # 📊 戰情總覽儀表板
         st.subheader("📊 盤面戰情總覽")
         buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
         sell_count = analyzed_df[analyzed_df['動向狀態'].str.contains('倒貨|賣')].shape[0]
-        # 計算買進且星星數>=4的標的
         star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('⭐') >= 4)].shape[0]
         
         m1, m2, m3 = st.columns(3)
@@ -487,9 +509,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         m3.metric("⭐ 觸發雙引擎共振標的", f"{star_count} 檔", help="同時被主力連續買進，且技術面達4顆星以上的強勢股！")
         
         st.divider()
-        st.subheader("🔥 經理人持股 × 六星技術面共振榜")
+        st.subheader("🔥 經理人持股 × 最新報價 × 六星技術面共振榜")
         
-        # 顯示雙引擎共振表格
+        # 顯示雙引擎共振表格，並優化股價欄位格式
         st.dataframe(
             analyzed_df,
             use_container_width=True,
@@ -501,6 +523,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 ),
                 "最新持股張數": st.column_config.NumberColumn(
                     "最新持股張數", format="%d"
+                ),
+                "最新收盤價": st.column_config.Column(
+                    "最新收盤價"
                 )
             }
         )
@@ -511,6 +536,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.subheader("💡 實戰看盤訣竅")
     col1, col2 = st.columns(2)
     with col1:
-        st.success("**🎯 必買黃金交叉**\n動向狀態為 **🟢 主力連買**，且旁邊的「六星技術評等」亮出 **⭐⭐⭐⭐ 以上**。這代表大人在買，且股價剛好帶量突破均線！")
+        st.success("**🎯 必買黃金交叉**\n動向狀態為 **🟢 主力連買**，且旁邊的「六星技術評等」亮出 **⭐⭐⭐⭐ 以上**。搭配「最新收盤價」判斷，如果股價剛過前高，這是最棒的上車點！")
     with col2:
         st.warning("**👀 伏擊區間**\n動向狀態為 **🟢 主力連買**，但技術評等顯示 **☁️ 盤整/休息**。這代表經理人正在「偷偷吃貨」但股價還沒發動，可先加入自選股觀察。")

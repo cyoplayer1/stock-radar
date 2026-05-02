@@ -10,11 +10,12 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
-import sqlite3
 import os
+import json
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
+# 🛡️ 忽略因為跳過 SSL 驗證產生的警告訊息
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
@@ -23,13 +24,13 @@ HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
 # === 2. 🛡️ 安全連線防護機制 ===
-def safe_get_json(url, headers=HEADERS, max_retries=3):
+def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False)
             response.raise_for_status() 
             return response.json()
-        except (ChunkedEncodingError, ConnectionError, ReadTimeout):
+        except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
             st.toast(f"⚠️ 證交所連線不穩，正在進行第 {attempt + 1} 次重試...", icon="🔄")
             time.sleep(2)
         except ValueError:
@@ -79,6 +80,7 @@ def get_inst_data():
         r1 = safe_get_json(u1, HEADERS)
         if 'data' in r1:
             for d in r1['data']: inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
+            
         u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
         r2 = safe_get_json(u2, HEADERS)
         if 'aaData' in r2:
@@ -99,6 +101,7 @@ def get_hot_rank_ids():
                     df_tmp['val'] = pd.to_numeric(df_tmp['成交金額'].str.replace(',',''), errors='coerce')
                     hot_ids.update(df_tmp.sort_values('val', ascending=False).head(15)['證券代號'].tolist())
                     break
+                    
         u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         res2 = safe_get_json(u2, HEADERS)
         data_otc = res2.get('aaData', []) or (res2.get('tables', [{}])[0].get('data', []) if 'tables' in res2 else [])
@@ -200,196 +203,109 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🐳 大戶爬蟲與 SQLite 整合引擎 ===
-def fetch_and_save_whale_data(db_name="whale_tracker.db"):
-    url = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
-    data = safe_get_json(url)
-    
-    if not data or 'data' not in data: return False, "今日無數據或抓取失敗 (可能是假日或尚未盤後更新)"
-    
-    try:
-        columns = data['fields']
-        df = pd.DataFrame(data['data'], columns=columns)
-        
-        trust_col = [c for c in columns if '投信買賣超' in c][0]
-        foreign_col = [c for c in columns if '外陸資買賣超' in c or ('外資' in c and '買賣超' in c)][0]
-        
-        df['投信買賣超(張)'] = df[trust_col].str.replace(',', '').astype(float) / 1000
-        df['外資買賣超(張)'] = df[foreign_col].str.replace(',', '').astype(float) / 1000
-        df['日期'] = datetime.date.today().strftime("%Y-%m-%d")
-        
-        trust_df = df[['日期', '證券代號', '證券名稱', '投信買賣超(張)']]
-        foreign_df = df[['日期', '證券代號', '證券名稱', '外資買賣超(張)']]
-        
-        conn = sqlite3.connect(db_name)
-        cursor = conn.cursor()
-        cursor.execute('CREATE TABLE IF NOT EXISTS trust_net_buy (日期 TEXT, 證券代號 TEXT, 證券名稱 TEXT, "投信買賣超(張)" REAL)')
-        cursor.execute('CREATE TABLE IF NOT EXISTS foreign_net_buy (日期 TEXT, 證券代號 TEXT, 證券名稱 TEXT, "外資買賣超(張)" REAL)')
-        
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        cursor.execute("DELETE FROM trust_net_buy WHERE 日期=?", (today_str,))
-        cursor.execute("DELETE FROM foreign_net_buy WHERE 日期=?", (today_str,))
-        
-        trust_df.to_sql('trust_net_buy', conn, if_exists='append', index=False)
-        foreign_df.to_sql('foreign_net_buy', conn, if_exists='append', index=False)
-        
-        conn.commit()
-        conn.close()
-        return True, f"成功寫入 {len(df)} 筆投信與外資籌碼資料！"
-    except Exception as e:
-        return False, str(e)
-
-@st.cache_data(ttl=60)
-def get_whale_consecutive_buys(db_name="whale_tracker.db", min_days=1, whale_type="trust"):
-    if not os.path.exists(db_name): return None 
-    
-    table_name = "trust_net_buy" if whale_type == "trust" else "foreign_net_buy"
-    col_name = "投信買賣超(張)" if whale_type == "trust" else "外資買賣超(張)"
+# === 6. 🕵️‍♂️ 00981A 經理人籌碼追蹤邏輯 (即時抓取與儲存版) ===
+def fetch_today_holdings_from_api(etf_code="00981A"):
+    """
+    從證交所或投信官網抓取『今日』的最新持股。
+    (此處以常見的證交所 ETF8 API 為結構範例。)
+    """
+    today = datetime.datetime.today().strftime('%Y-%m-%d')
+    new_data = []
     
     try:
-        conn = sqlite3.connect(db_name)
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
-        if not cursor.fetchone():
-            conn.close()
-            return pd.DataFrame()
-            
-        df = pd.read_sql_query(f"SELECT * FROM {table_name} ORDER BY 證券代號, 日期", conn)
-        conn.close()
-        if df.empty: return pd.DataFrame()
+        url = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
+        res = safe_get_json(url, HEADERS)
         
-        hot_stocks = []
-        for stock_id, group in df.groupby('證券代號'):
-            diffs = group[col_name].tolist()
-            buy_days, total_buy = 0, 0
-            for net_buy in reversed(diffs):
-                if net_buy > 0:
-                    buy_days += 1
-                    total_buy += net_buy
-                else: break 
-                    
-            if buy_days >= min_days:
-                stock_name = group.iloc[-1]['證券名稱']
-                hot_stocks.append({
-                    "代號": stock_id, "股票名稱": stock_name, "動向狀態": "🟢 主力連買",
-                    "連續天數": buy_days, "期間累積買超(張)": int(total_buy), "最新資料日期": group.iloc[-1]['日期']
-                })
+        if res and 'data' in res:
+            for row in res['data']:
+                ticker = str(row[0]).strip()
+                name = str(row[1]).strip()
+                shares = int(row[2].replace(',', '')) // 1000 
                 
-        if hot_stocks: return pd.DataFrame(hot_stocks).sort_values(by="連續天數", ascending=False)
+                new_data.append([today, ticker, name, shares])
+                
+    except Exception as e:
+        st.toast(f"⚠️ 即時持股抓取失敗: {e}", icon="❌")
+        
+    return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
+
+def get_00981a_holdings_history():
+    """
+    獲取歷史持股紀錄。
+    每天執行時，會檢查今天是否已經抓過，若無則抓取並存入本地 CSV 累積歷史資料。
+    """
+    db_path = "00981A_holdings_db.csv"
+    today_str = datetime.datetime.today().strftime('%Y-%m-%d')
+    
+    # 1. 讀取本地端累積的歷史資料
+    if os.path.exists(db_path):
+        df_history = pd.read_csv(db_path)
+    else:
+        df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
+        
+    # 2. 檢查今天是否已經抓取過，如果抓過了就直接回傳歷史資料庫
+    if not df_history.empty and today_str in df_history['日期'].values:
+        return df_history
+        
+    # 3. 若今天尚未抓取，啟動即時爬蟲抓取今日最新資料
+    with st.spinner("🔄 正在獲取經理人今日最新持股..."):
+        df_today = fetch_today_holdings_from_api("00981A")
+        
+    # 4. 如果今天有抓到新資料，合併進歷史資料庫並存檔
+    if not df_today.empty:
+        df_history = pd.concat([df_history, df_today], ignore_index=True)
+        df_history.to_csv(db_path, index=False)
+        st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
+        
+    if df_history.empty:
+        return pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
+        
+    return df_history
+
+def analyze_manager_moves(df):
+    if df.empty:
         return pd.DataFrame()
-    except Exception as e:
-        st.error(f"讀取資料庫錯誤: {e}")
-        return None
+        
+    df = df.sort_values(by=['代號', '日期'])
+    df['單日買賣超(張)'] = df.groupby('代號')['持有張數'].diff().fillna(0)
+    
+    results = []
+    for stock_id, group in df.groupby('代號'):
+        group = group.sort_values('日期')
+        diffs = group['單日買賣超(張)'].tolist()
+        
+        consecutive_buy = 0
+        for diff in reversed(diffs):
+            if diff > 0: consecutive_buy += 1
+            else: break
+                
+        consecutive_sell = 0
+        for diff in reversed(diffs):
+            if diff < 0: consecutive_sell += 1
+            else: break
+                
+        latest_record = group.iloc[-1]
+        
+        if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
+        elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
+        else: status, days = "⚪ 靜止觀望", 0
+            
+        results.append({
+            "代號": stock_id,
+            "股票名稱": latest_record['股票名稱'],
+            "最新持股張數": int(latest_record['持有張數']),
+            "今日買賣超(張)": int(latest_record['單日買賣超(張)']),
+            "動向狀態": status,
+            "連續天數": f"{days} 天" if days > 0 else "-"
+        })
+        
+    return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# === 7. 🕵️‍♂️ 00981A 真實數據連線引擎 (棄用寫死的陣列) ===
-def get_stock_price(ticker, days=5):
-    """連線 Yahoo Finance 取得歷史收盤價，計算 VWAP"""
-    try:
-        clean = ticker.replace('.TW','').replace('.TWO','')
-        tid = clean + ".TW"
-        df = yf.Ticker(tid).history(period=f"{days+2}d")
-        if df.empty:
-            tid = clean + ".TWO"
-            df = yf.Ticker(tid).history(period=f"{days+2}d")
-        if not df.empty:
-            return df['Close'].tolist()[-days:]
-    except: pass
-    return []
-
-def analyze_00981a_real_moves_with_cost(db_name="whale_tracker.db"):
-    """直接從資料庫抓取真實投信買賣超，並透過 Yahoo API 算真實均價"""
-    # 00981A 關注的成分股 (若官網有更新，只需修改這裡的基準權重即可)
-    target_stocks = {
-        "2330": {"name": "台積電", "weight": 19.5},
-        "2317": {"name": "鴻海", "weight": 8.5},
-        "2454": {"name": "聯發科", "weight": 6.5},
-        "2383": {"name": "台光電", "weight": 9.8}, # 預設逼近上限測試用
-        "2345": {"name": "智邦", "weight": 5.2},
-        "3231": {"name": "緯創", "weight": 3.0},
-        "3017": {"name": "奇鋐", "weight": 7.0},
-        "3661": {"name": "世芯-KY", "weight": 4.5},
-        "2368": {"name": "金像電", "weight": 2.1},
-        "3324": {"name": "雙鴻", "weight": 1.5},
-        "2308": {"name": "台達電", "weight": 4.0},
-        "2382": {"name": "廣達", "weight": 3.8},
-        "3034": {"name": "聯詠", "weight": 1.2},
-        "2603": {"name": "長榮", "weight": 2.0}
-    }
-
-    if not os.path.exists(db_name): return None
-
-    try:
-        conn = sqlite3.connect(db_name)
-        # 只抓出這些特定股票的真實籌碼資料
-        placeholders = ','.join('?' for _ in target_stocks.keys())
-        query = f"SELECT * FROM trust_net_buy WHERE 證券代號 IN ({placeholders}) ORDER BY 證券代號, 日期"
-        df = pd.read_sql_query(query, conn, params=list(target_stocks.keys()))
-        conn.close()
-
-        if df.empty: return pd.DataFrame()
-
-        results = []
-        for stock_id, group in df.groupby('證券代號'):
-            group = group.sort_values('日期')
-            diffs = group['投信買賣超(張)'].tolist()
-
-            consecutive_buy = sum(1 for d in reversed(diffs) if d > 0) if diffs[-1] > 0 else 0
-            consecutive_sell = sum(1 for d in reversed(diffs) if d < 0) if diffs[-1] < 0 else 0
-
-            latest_record = group.iloc[-1]
-            weight = target_stocks[stock_id]['weight']
-
-            # === 🚨 權重滿水位防追高警示邏輯 ===
-            max_limit = 25.0 if stock_id == "2330" else 10.0
-
-            if weight >= (max_limit - 0.5):
-                weight_str = f"🛑 {weight}% (滿水位)"
-                action_hint = "❌ 嚴禁追高 (被迫結帳區)"
-            elif weight >= (max_limit - 2.0):
-                weight_str = f"⚠️ {weight}% (近上限)"
-                action_hint = "🟡 子彈將盡 (留意倒貨)"
-            else:
-                weight_str = f"✅ {weight}%"
-                action_hint = "🟢 空間充裕 (可跟單)"
-
-            # --- VWAP 經理人真實成本估算邏輯 ---
-            est_cost = 0.0
-            dist_to_cost = "-"
-            if consecutive_buy > 0:
-                # 抓取 Yahoo API 真實收盤價來算成本
-                prices = get_stock_price(stock_id, consecutive_buy)
-                buy_vols = diffs[-consecutive_buy:]
-                if len(prices) == len(buy_vols) and sum(buy_vols) > 0:
-                    est_cost = sum(p * v for p, v in zip(prices, buy_vols)) / sum(buy_vols)
-                    current_p = prices[-1]
-                    dist = ((current_p - est_cost) / est_cost) * 100
-                    dist_to_cost = f"{dist:+.1f}%"
-
-            if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
-            elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
-            else: status, days = "⚪ 靜止觀望", 0
-
-            results.append({
-                "代號": stock_id, 
-                "股票名稱": target_stocks[stock_id]['name'], 
-                "權重與狀態": weight_str,
-                "跟單建議": action_hint,
-                "今日真實買賣超": int(latest_record['投信買賣超(張)']), 
-                "動向狀態": status, 
-                "連買天數": f"{days} 天" if days > 0 else "-",
-                "預估真實均價": f"{est_cost:.1f}" if est_cost > 0 else "-",
-                "即時成本乖離": dist_to_cost
-            })
-        return pd.DataFrame(results).sort_values(by="今日真實買賣超", ascending=False)
-    except Exception as e:
-        st.error(f"讀取資料庫錯誤: {e}")
-        return None
-
-# === 8. 側邊欄與介面 ===
+# === 7. 側邊欄與介面 ===
 st.sidebar.title("📡 導覽選單")
 main_page = st.sidebar.radio(
     "跳轉頁面", 
-    ["🎯 股神六星雷達系統", "🐳 大戶(投信)連買狙擊雷達", "🦅 大戶(外資)連買狙擊雷達", "🕵️‍♂️ 00981A 經理人跟單雷達"]
+    ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"]
 )
 st.sidebar.markdown("---")
 
@@ -411,6 +327,8 @@ if main_page == "🎯 股神六星雷達系統":
         ### 🎯 買進策略：共振發動
         * **核心指標：** 5顆星以上股票。
         * **黃金組合：** 同時出現 **[KD金叉]**、**[爆量攻擊]**、**🔥[排行熱門]** 與 **🔴[大戶進駐]**。
+        * **三不買：** 沒量不買、月線向下不買、星星掉隊不買。
+        ---
         """)
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
@@ -421,15 +339,17 @@ if main_page == "🎯 股神六星雷達系統":
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
-            
             if res:
-                df = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False])
-                df.reset_index(drop=True, inplace=True)
-                df.insert(0, '排名', df.index + 1)
-                st.dataframe(df[['排名', '標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True, hide_index=True)
+                df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
+                st.dataframe(df[['標的', '星等', '收盤', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
 
     with t2:
-        st.markdown("### 💰 量能先行：主力足跡")
+        st.markdown("""
+        ### 💰 量能先行：主力足跡
+        * **前 15 名：** 這裡是當前盤面上資金最滾燙的地方。
+        * **連動參考：** 如果雷達星星也出現在這張清單，代表「熱點共振」。
+        ---
+        """)
         if st.button("🔄 刷新排行"): st.cache_data.clear()
         c1, c2 = st.columns(2)
         with c1:
@@ -459,7 +379,12 @@ if main_page == "🎯 股神六星雷達系統":
                 st.table(d15b[[0, 1, '金額']].rename(columns={0:'證券代號', 1:'證券名稱'}).reset_index(drop=True))
 
     with t3:
-        st.markdown("### 📈 互動圖表：型態確認")
+        st.markdown("""
+        ### 📈 互動圖表：型態確認
+        * **看均線：** 股價是否「帶量」穿過三條均線？
+        * **看位置：** 買在突破盤整區的第一根 K 線，勝率最高。
+        ---
+        """)
         sid = st.text_input("🔍 代號", value="2330", key="chart_in")
         if st.button("📈 繪圖", use_container_width=True):
             tid = sid + ".TW" if "." not in sid else sid
@@ -474,7 +399,12 @@ if main_page == "🎯 股神六星雷達系統":
                 st.plotly_chart(fig, use_container_width=True)
 
     with t4:
-        st.markdown("### 🛡️ 診斷儀表板：賣出紀律")
+        st.markdown("""
+        ### 🛡️ 診斷儀表板：賣出紀律
+        * **停損底線：** 跌破 20 日月線 = 趨勢毀掉，無條件離場。
+        * **短線減碼：** 股價離 5 日線太遠或 KD 高檔死叉時，先獲利了結。
+        ---
+        """)
         d_id = st.text_input("🔍 診斷代號", value="2330", key="diag_in")
         if st.button("🛡️ 執行診斷", use_container_width=True):
             r = diagnose_holding(d_id)
@@ -488,83 +418,46 @@ if main_page == "🎯 股神六星雷達系統":
                 else: st.error(f"**建議：** {r['建議']}")
 
 # ==========================================
-# 分頁 2 & 3: 🐳/🦅 大戶連買狙擊雷達
-# ==========================================
-elif main_page in ["🐳 大戶(投信)連買狙擊雷達", "🦅 大戶(外資)連買狙擊雷達"]:
-    is_trust = "投信" in main_page
-    title = "🐳 投信連買狙擊雷達 (作帳行情)" if is_trust else "🦅 外資連買狙擊雷達 (波段趨勢)"
-    st.title(title)
-    
-    if st.button("🔄 點我手動更新今日大戶籌碼 (雙引擎同步更新)", type="primary"):
-        with st.spinner("🚀 正在抓取投信與外資最新籌碼，並建立資料庫..."):
-            success, msg = fetch_and_save_whale_data()
-            if success:
-                st.success(f"✅ 更新成功！{msg}")
-                time.sleep(1) 
-                st.rerun() 
-            else: st.error(f"❌ 更新失敗：{msg}")
-    st.divider()
-
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        min_days = st.number_input("🔥 至少連續買超幾天？", min_value=1, max_value=20, value=1, step=1)
-    with col2:
-        st.info("⚠️ 若無資料，請確認今日盤後是否已點擊上方更新按鈕。投信與外資資料庫是共用同步的！")
-        
-    st.subheader(f"🔥 全市場排行榜 (連買 ≥ {min_days} 天)")
-    analyzed_df = get_whale_consecutive_buys(min_days=min_days, whale_type="trust" if is_trust else "foreign")
-    
-    if analyzed_df is None: st.error("❌ 找不到資料庫！請先點擊上方更新按鈕。")
-    elif analyzed_df.empty: st.warning(f"📉 目前無連續買進達 {min_days} 天之股票。")
-    else:
-        st.dataframe(analyzed_df, use_container_width=True, hide_index=True, height=600, 
-            column_config={"期間累積買超(張)": st.column_config.NumberColumn(format="%d"),
-                           "連續天數": st.column_config.ProgressColumn(format="%d 天", min_value=0, max_value=10)})
-
-# ==========================================
-# 分頁 4: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
-    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (全真實數據串接版)")
+    st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (即時籌碼追蹤)")
     st.markdown("""
-    **💡 頂級操盤手視角**：本分頁已拔除假資料，直接連線 `whale_tracker.db` 讀取全市場真實投信數據，並連線 `Yahoo Finance` 算出真實均價！
-    若「權重與狀態」亮起紅燈，代表大戶被迫將在近期倒貨，此時**嚴禁追高**！
+    **💡 策略邏輯**：主動式 ETF 必須每日公布持股。我們透過比對「今日」與「昨日」的持股張數，
+    就能抓出統一投信經理人正在偷偷**連續加碼**哪些股票，直接跟著主力籌碼上車！
     """)
-    st.info("⚠️ 每日收盤後，請記得先至「大戶連買雷達」分頁點擊紅色按鈕更新資料庫，此處的數據才會是最新的。")
+    st.info("🔄 系統將每日自動抓取最新持股，並與本地資料庫比對計算買賣超變化。")
     st.divider()
     
-    st.subheader("🔥 今日經理人換股動向排行榜 (含六星與權重健檢)")
+    st.subheader("🔥 今日經理人換股動向排行榜")
     
-    with st.spinner("✨ 正在讀取真實投信籌碼、連線 Yahoo API 估算成本，並執行六星掃描 (約需 3-5 秒)..."):
-        analyzed_df = analyze_00981a_real_moves_with_cost()
-        
-        if analyzed_df is None or analyzed_df.empty:
-            st.error("❌ 找不到資料庫或無數據！請先至「大戶連買雷達」分頁點擊更新按鈕。")
-        else:
-            inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids()
-            def get_star(ticker):
-                res = analyze_stock_score(ticker, inst_map, hot_list)
-                return res['星等'] if res else "休息"
-                
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = {ex.submit(get_star, ticker): ticker for ticker in analyzed_df['代號']}
-                star_dict = {futs[f]: f.result() for f in as_completed(futs)}
-                    
-            # 將「六星雷達」插入到股票名稱後面
-            analyzed_df.insert(2, '六星雷達', analyzed_df['代號'].map(star_dict))
-
-            st.dataframe(
-                analyzed_df, use_container_width=True, hide_index=True, height=550, 
-                column_config={
-                    "今日真實買賣超": st.column_config.NumberColumn("今日真實買賣超(張)", format="%d")
-                }
-            )
+    # 執行籌碼分析 (即時爬蟲 + 本地資料庫比對)
+    raw_df = get_00981a_holdings_history()
+    analyzed_df = analyze_manager_moves(raw_df)
+    
+    if not analyzed_df.empty:
+        # 使用 dataframe 顯示並特別設定數字欄位的格式
+        st.dataframe(
+            analyzed_df,
+            use_container_width=True,
+            hide_index=True,
+            height=550, 
+            column_config={
+                "今日買賣超(張)": st.column_config.NumberColumn(
+                    "今日買賣超(張)", help="正數代表買進，負數代表賣出", format="%d"
+                ),
+                "最新持股張數": st.column_config.NumberColumn(
+                    "最新持股張數", format="%d"
+                )
+            }
+        )
+    else:
+        st.warning("目前尚未收集到足夠的歷史資料，或今日 API 獲取失敗，請稍後再試。")
     
     st.divider()
-    st.subheader("💡 實戰狙擊建議 (避險防呆版)")
+    st.subheader("💡 實戰跟單建議")
     col1, col2 = st.columns(2)
     with col1:
-        st.success("**🎯 完美抬轎訊號**\n* 跟單建議顯示 **🟢 空間充裕 (可跟單)**。\n* 乖離率在 **+3% 以內** (代表你現在進場，成本跟大戶幾乎一樣)。\n* 六星雷達顯示 `⭐⭐⭐⭐⭐`。")
+        st.success("**進場黃金訊號**\n* 狀態出現 **🟢 主力連買**，且連續天數達 `2天` 以上。\n* 如果切換到「股神六星雷達」判定該股為 `5星`，可以直接重倉上車。")
     with col2:
-        st.error("**🛑 避開被迫結帳陷阱**\n* 如果跟單建議顯示 **❌ 嚴禁追高 (被迫結帳區)**，代表該股佔 ETF 權重已接近法規上限，經理人隨時會被法規強制賣出，股價極易反轉下殺！")
+        st.error("**避險與出場訊號**\n* 狀態出現 **🔴 經理人倒貨**。\n* 主動式 ETF 換股果決，發現經理人由買轉賣 (負數)，且連續賣出，立刻跟著拔檔！")

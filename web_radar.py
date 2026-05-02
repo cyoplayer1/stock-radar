@@ -23,7 +23,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 (無 UI 快取衝突版) ===
+# === 2. 🛡️ 安全連線防護機制 ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -41,7 +41,6 @@ def safe_get_json(url, headers, max_retries=3):
 # === 3. 核心計算函數與大盤風向球 ===
 @st.cache_data(ttl=1800)
 def get_market_breadth():
-    """獲取台股加權指數狀態，作為大盤多空風向球"""
     try:
         df = yf.Ticker("^TWII").history(period="3mo")
         if not df.empty:
@@ -109,6 +108,58 @@ def estimate_vwap(symbol, days):
             return round(vwap, 2)
     except: pass
     return "---"
+
+# === 🏢 3&4. 基本面與 AI 情感引擎 ===
+def get_fundamentals_and_news(symbol):
+    """獲取營收 YoY、EPS 與近期新聞"""
+    try:
+        tkr = yf.Ticker(f"{symbol}.TW")
+        info = tkr.info
+        if not info or 'symbol' not in info:
+            tkr = yf.Ticker(f"{symbol}.TWO")
+            info = tkr.info
+        
+        eps = info.get('trailingEps', '---')
+        pe = info.get('trailingPE', '---')
+        rev_growth = info.get('revenueGrowth', None)
+        if rev_growth is not None:
+            rev_growth_str = f"{rev_growth * 100:.2f} %"
+        else:
+            rev_growth_str = "---"
+            
+        news = tkr.news[:5] if tkr.news else []
+        return eps, pe, rev_growth_str, news
+    except:
+        return "---", "---", "---", []
+
+def ai_news_sentiment(news_list):
+    """輕量級 NLP 情感判定引擎"""
+    if not news_list:
+        return "⚪ 尚無近期外電或財經新聞可供分析。"
+    
+    # 建立多空關鍵字辭典
+    pos_words = ['增', '漲', '高', '好', '優', '強', '大單', '受惠', '利多', '新高', '突破', '成長', '看好']
+    neg_words = ['減', '跌', '低', '壞', '差', '弱', '砍單', '衰退', '利空', '破底', '下修', '看壞', '不如預期']
+    
+    score = 0
+    titles = []
+    for n in news_list:
+        t = n.get('title', '')
+        titles.append(t)
+        for w in pos_words:
+            if w in t: score += 1
+        for w in neg_words:
+            if w in t: score -= 1
+    
+    if score >= 2:
+        conclusion = "🟢 **【AI 情感判定：偏多】** 近期新聞頻頻釋出利多，市場情緒樂觀，具備消息面保護傘。"
+    elif score <= -2:
+        conclusion = "🔴 **【AI 情感判定：偏空】** 近期新聞出現雜音或利空，請嚴格控管資金與停損。"
+    else:
+        conclusion = "🟡 **【AI 情感判定：中性】** 近期新聞無極端多空方向，請回歸技術面與籌碼面操作。"
+        
+    summary = "\n".join([f"- {t}" for t in titles])
+    return f"{conclusion}\n\n**📰 近期重要新聞標題抓取：**\n{summary}"
 
 @st.cache_data(ttl=3600)
 def get_inst_data():
@@ -180,7 +231,6 @@ STOCKS_DICT = {
     "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
-# 簡單產業地圖供熱力圖使用
 SECTOR_MAP = {
     "2330": "半導體", "2454": "半導體", "3661": "半導體", "3034": "半導體",
     "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器", "2356": "AI伺服器",
@@ -189,7 +239,7 @@ SECTOR_MAP = {
     "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
 }
 
-# === 5. 雷達掃描與診斷邏輯 (加入處置警戒 & 隔日沖警戒) ===
+# === 5. 雷達掃描與診斷邏輯 ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -211,12 +261,9 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         df['MA5'] = df['Close'].rolling(5).mean(); df['MA20'] = df['Close'].rolling(20).mean(); df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df); df = calculate_macd(df)
         
-        # 🚨 處置股預判演算法：5日漲幅 > 25% 或 月線乖離 > 30%
         return_5d = (c / df['Close'].iloc[-6]) - 1 if len(df) >= 6 else 0
         bias_20 = (c / df['MA20'].iloc[-1]) - 1
         is_warning = return_5d > 0.25 or bias_20 > 0.30
-        
-        # 🪤 隔日沖警戒演算法：今日爆量3倍且留長上影線 (高點離收盤>4%)
         upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
         is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
         
@@ -231,8 +278,6 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if clean in hot_list: tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
-        
-        # 加入防護網標籤
         if is_warning: tags.append("🚨[處置警戒]")
         if is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]")
         
@@ -277,7 +322,6 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 回測引擎 ===
 def run_simple_backtest(symbol):
     try:
         tid = f"{symbol}.TW"
@@ -290,7 +334,6 @@ def run_simple_backtest(symbol):
         df['MA20'] = df['Close'].rolling(20).mean()
         df = df.dropna()
         
-        # 簡單策略：突破月線買進，跌破月線賣出
         df['Signal'] = 0
         df.loc[df['Close'] > df['MA20'], 'Signal'] = 1
         df['Return'] = df['Close'].pct_change()
@@ -299,7 +342,6 @@ def run_simple_backtest(symbol):
         
         win_rate = len(df[df['Strategy_Return'] > 0]) / len(df[df['Strategy_Return'] != 0]) if len(df[df['Strategy_Return'] != 0]) > 0 else 0
         total_return = df['Equity'].iloc[-1] - 100
-        
         return df, win_rate, total_return
     except: return None
 
@@ -347,7 +389,7 @@ def get_00981a_holdings_history(force_refresh=False):
             ("2317", "鴻海", [1000, 1500, 2000, 3000]),
             ("3231", "緯創", [2000, 2000, 2000, 3500]),
             ("2383", "台光電", [3000, 3000, 3500, 4200]),
-            ("6805", "富世達", [200, 400, 800, 1500]), # 模擬飆股
+            ("6805", "富世達", [200, 400, 800, 1500]), 
             ("3017", "奇鋐", [800, 800, 1200, 1800]),
             ("2345", "智邦", [1000, 1200, 1500, 1900]),
             ("3533", "嘉澤", [600, 600, 700, 900]),
@@ -360,14 +402,11 @@ def get_00981a_holdings_history(force_refresh=False):
             ("2603", "長榮", [5000, 4000, 3000, 2000]),
             ("3661", "世芯-KY", [400, 400, 400, 200]),
         ]
-        
         dummy_rows = []
         for ticker, name, shares in mock_scenarios:
             for i, d in enumerate(dates):
                 dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
-                
         return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
-        
     return df_history
 
 def analyze_manager_moves(df):
@@ -412,7 +451,6 @@ def analyze_manager_moves(df):
 # === 7. 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 導覽選單")
 
-# 🌍 大盤風向球儀表板
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
 tw_c, tw_m20, tw_status = get_market_breadth()
@@ -424,7 +462,6 @@ if tw_c:
         st.sidebar.error(tw_status)
 else:
     st.sidebar.write("大盤資料讀取中...")
-
 st.sidebar.markdown("---")
 
 main_page = st.sidebar.radio(
@@ -442,8 +479,8 @@ if main_page == "🎯 股神六星雷達系統":
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 稀有的股神系統：真・大滿配終極版")
-    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
+    st.title("📡 稀有的股神系統：四維共振・真・大滿配終極版")
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
@@ -536,7 +573,7 @@ if main_page == "🎯 股神六星雷達系統":
                     st.info(f"""
                     #### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**
                     * **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。
-                    * **風控說明**：在此紀律下，就算看錯停損，您的最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右，不會傷及筋骨！
+                    * **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。
                     """)
 
     with t5:
@@ -579,6 +616,28 @@ if main_page == "🎯 股神六星雷達系統":
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning("資料不足，無法回測。")
+
+    with t7:
+        st.markdown("### 🏢 基本面濾網與 AI 財報新聞分析")
+        st.markdown("結合企業獲利動能與最新市場消息，打造「技術＋籌碼＋基本面＋消息面」四維防護。")
+        f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2330", key="fund_in")
+        if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
+            with st.spinner("⚡ 正在爬取最新財報數據與外電新聞..."):
+                eps, pe, rev, news_list = get_fundamentals_and_news(f_id)
+                ai_report = ai_news_sentiment(news_list)
+                
+                st.markdown(f"#### 📊 {f_id} 核心基本面數據")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("近四季 EPS (元)", eps)
+                c2.metric("本益比 (P/E)", pe)
+                c3.metric("最新營收年增率 (YoY)", rev)
+                
+                if rev != "---" and float(rev.replace('%','')) > 10:
+                    st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
+                
+                st.divider()
+                st.markdown("#### 🧠 AI 消息面情感解析")
+                st.info(ai_report)
 
 # ==========================================
 # 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達

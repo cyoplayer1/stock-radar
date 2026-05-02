@@ -368,7 +368,9 @@ if main_page == "🎯 股神六星雷達系統":
         * **連動參考：** 如果雷達星星也出現在這張清單，代表「熱點共振」。
         ---
         """)
-      with c1:
+        if st.button("🔄 刷新排行"): st.cache_data.clear()
+        c1, c2 = st.columns(2)
+        with c1:
             st.subheader("📈 上市排行")
             url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
             res = safe_get_json(url, HEADERS) 
@@ -378,7 +380,6 @@ if main_page == "🎯 股神六星雷達系統":
                         df1 = pd.DataFrame(table['data'], columns=table['fields'])
                         df1['值'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
                         d15 = df1.sort_values('值', ascending=False).head(15).copy()
-                        # 👇 這裡修正了 f-string 的語法
                         d15['金額'] = d15['值'].apply(lambda x: f"{int(x/100000000):,} 億")
                         st.table(d15[['證券代號','證券名稱','金額']].reset_index(drop=True))
                         break

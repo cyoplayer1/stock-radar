@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 import os
+import numpy as np
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
@@ -37,7 +38,21 @@ def safe_get_json(url, headers, max_retries=3):
             break
     return {}
 
-# === 3. 核心計算函數 ===
+# === 3. 核心計算函數與大盤風向球 ===
+@st.cache_data(ttl=1800)
+def get_market_breadth():
+    """獲取台股加權指數狀態，作為大盤多空風向球"""
+    try:
+        df = yf.Ticker("^TWII").history(period="3mo")
+        if not df.empty:
+            df['MA20'] = df['Close'].rolling(20).mean()
+            c = df['Close'].iloc[-1]
+            m20 = df['MA20'].iloc[-1]
+            status = "🟢 偏多順風 (站上月線，適合積極操作)" if c > m20 else "🔴 偏空逆風 (跌破月線，建議縮小部位)"
+            return round(c, 2), round(m20, 2), status
+    except: pass
+    return None, None, "⚪ 未知"
+
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -84,7 +99,6 @@ def fetch_fast_price(symbol):
     return "---"
 
 def estimate_vwap(symbol, days):
-    """計算主力連買期間的推估成本 (VWAP)"""
     if days <= 0 or not isinstance(days, int): return "---"
     try:
         df = yf.Ticker(f"{symbol}.TW").history(period="1mo")
@@ -137,23 +151,45 @@ def get_hot_rank_ids():
     except: pass
     return hot_ids
 
-# === 4. 名單字典與產業族群對照表 ===
+# === 4. 名單字典 (完整 112 檔) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
-    "3231.TW": "緯創", "2383.TW": "台光電", "2368.TW": "金像電", "3017.TW": "奇鋐",
-    "2345.TW": "智邦", "3533.TW": "嘉澤", "3324.TW": "雙鴻", "2382.TW": "廣達",
-    "3034.TW": "聯詠", "2603.TW": "長榮", "3661.TW": "世芯-KY", "6805.TW": "富世達"
+    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
+    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
+    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
+    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
+    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
+    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
+    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
+    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
+    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
+    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
+    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
+    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
+    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
+    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
+    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
+    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
+    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
+    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
+    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
+    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
+    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
+    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
+    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
+    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
 }
 
+# 簡單產業地圖供熱力圖使用
 SECTOR_MAP = {
     "2330": "半導體", "2454": "半導體", "3661": "半導體", "3034": "半導體",
-    "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器",
-    "3017": "散熱模組", "3324": "散熱模組", "6805": "軸承",
-    "2383": "PCB零組件", "2368": "PCB零組件", "3533": "連接器",
-    "2308": "電源供應", "2345": "網通", "2603": "航運"
+    "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器", "2356": "AI伺服器",
+    "3017": "散熱模組", "3324": "散熱模組", "3653": "散熱模組",
+    "2383": "PCB零組件", "2368": "PCB零組件", "3533": "連接器", "3037": "PCB零組件",
+    "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
 }
 
-# === 5. 雷達掃描與診斷邏輯 (加入處置警戒算法) ===
+# === 5. 雷達掃描與診斷邏輯 (加入處置警戒 & 隔日沖警戒) ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -180,6 +216,10 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         bias_20 = (c / df['MA20'].iloc[-1]) - 1
         is_warning = return_5d > 0.25 or bias_20 > 0.30
         
+        # 🪤 隔日沖警戒演算法：今日爆量3倍且留長上影線 (高點離收盤>4%)
+        upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
+        is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
+        
         s, tags = 0, []
         if c > df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1]: s+=1; tags.append("[均線多頭]")
         if df['MA20'].iloc[-1] > df['MA20'].iloc[-2]: s+=1; tags.append("[月線向上]")
@@ -191,10 +231,17 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if clean in hot_list: tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
+        
+        # 加入防護網標籤
         if is_warning: tags.append("🚨[處置警戒]")
+        if is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]")
         
         inst_display = f"{inst_val:,}" if inst_val != 0 else "--"
         name = STOCKS_DICT.get(tid, clean)
+        
+        risk_level = "✅ 安全"
+        if is_warning: risk_level = "🚨 高風險 (處置前兆)"
+        elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
         
         return {
             '標的': f"{clean} {name}", 
@@ -204,7 +251,7 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
             '今日量(張)': int(v/1000), 
             '觸發條件': " ".join(tags), 
             '星星數': s,
-            '處置風險': "⚠️ 高風險 (短線過熱)" if is_warning else "✅ 安全"
+            '處置與籌碼風險': risk_level
         }
     except: return None
 
@@ -230,7 +277,33 @@ def diagnose_holding(ticker_in):
         return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
     except: return None
 
-# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (火力全開版) ===
+# === 回測引擎 ===
+def run_simple_backtest(symbol):
+    try:
+        tid = f"{symbol}.TW"
+        df = yf.Ticker(tid).history(period="2y")
+        if df.empty:
+            tid = f"{symbol}.TWO"
+            df = yf.Ticker(tid).history(period="2y")
+        if len(df) < 60: return None
+        
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df = df.dropna()
+        
+        # 簡單策略：突破月線買進，跌破月線賣出
+        df['Signal'] = 0
+        df.loc[df['Close'] > df['MA20'], 'Signal'] = 1
+        df['Return'] = df['Close'].pct_change()
+        df['Strategy_Return'] = df['Signal'].shift(1) * df['Return']
+        df['Equity'] = (1 + df['Strategy_Return'].fillna(0)).cumprod() * 100
+        
+        win_rate = len(df[df['Strategy_Return'] > 0]) / len(df[df['Strategy_Return'] != 0]) if len(df[df['Strategy_Return'] != 0]) > 0 else 0
+        total_return = df['Equity'].iloc[-1] - 100
+        
+        return df, win_rate, total_return
+    except: return None
+
+# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
@@ -270,7 +343,6 @@ def get_00981a_holdings_history(force_refresh=False):
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
         dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         
-        # 加入一檔「飆股」來測試處置警戒 (富世達)
         mock_scenarios = [
             ("2317", "鴻海", [1000, 1500, 2000, 3000]),
             ("3231", "緯創", [2000, 2000, 2000, 3500]),
@@ -337,26 +409,41 @@ def analyze_manager_moves(df):
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
 
-# === 7. 側邊欄與介面 ===
+# === 7. 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 導覽選單")
+
+# 🌍 大盤風向球儀表板
+st.sidebar.markdown("---")
+st.sidebar.subheader("🌍 大盤多空風向球")
+tw_c, tw_m20, tw_status = get_market_breadth()
+if tw_c:
+    st.sidebar.metric("加權指數", f"{tw_c:,.0f}")
+    if "綠" in tw_status or "多" in tw_status:
+        st.sidebar.success(tw_status)
+    else:
+        st.sidebar.error(tw_status)
+else:
+    st.sidebar.write("大盤資料讀取中...")
+
+st.sidebar.markdown("---")
+
 main_page = st.sidebar.radio(
     "跳轉頁面", 
     ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"]
 )
-st.sidebar.markdown("---")
 
 if main_page == "🎯 股神六星雷達系統":
     st.sidebar.subheader("⚙️ 自選股水庫")
     def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
-    u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=200)
+    u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=200)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
 # ==========================================
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 稀有的股神系統：終極大滿配")
-    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置警戒清單"])
+    st.title("📡 稀有的股神系統：真・大滿配終極版")
+    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
@@ -371,8 +458,7 @@ if main_page == "🎯 股神六星雷達系統":
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
-                # 將處置風險獨立顯示提醒
-                st.dataframe(df[['標的', '星等', '收盤', '處置風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
+                st.dataframe(df[['標的', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']], use_container_width=True)
 
     with t2:
         st.markdown("### 💰 量能先行：主力足跡")
@@ -454,12 +540,7 @@ if main_page == "🎯 股神六星雷達系統":
                     """)
 
     with t5:
-        st.markdown("""
-        ### 🚨 處置/注意警戒清單 (多頭陷阱迴避)
-        * **法規預判：** 系統自動抓出「5日漲幅 > 25%」或「乖離月線 > 30%」的飆股。
-        * **實戰紀律：** 這些股票隨時會被證交所「關緊閉 (處置)」，買盤容易急凍。**看到請忍住，嚴禁追高！**
-        ---
-        """)
+        st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
         if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
@@ -471,16 +552,33 @@ if main_page == "🎯 股神六星雷達系統":
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     res = f.result()
-                    # 只抓出被標記為處置警戒的股票
-                    if res and "處置警戒" in res['觸發條件']:
+                    if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']):
                         danger_list.append(res)
             
             if danger_list:
                 df_danger = pd.DataFrame(danger_list)
-                st.error(f"🚨 **發現 {len(df_danger)} 檔短線過熱標的，隨時面臨處置風險！**")
-                st.dataframe(df_danger[['標的', '收盤', '處置風險', '觸發條件']], use_container_width=True)
+                st.error(f"🚨 **發現 {len(df_danger)} 檔高風險標的！請避免追高！**")
+                st.dataframe(df_danger[['標的', '收盤', '處置與籌碼風險', '觸發條件']], use_container_width=True)
             else:
-                st.success("✅ 目前自選庫中沒有面臨處置風險的過熱標的。")
+                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
+
+    with t6:
+        st.markdown("### 🧪 策略回測實驗室 (2年期)")
+        st.markdown("驗證『突破月線買進、跌破月線賣出』的波段策略，在過去兩年套用於該股票的真實績效。")
+        bt_id = st.text_input("🔍 欲回測標的代號", value="2317", key="bt_in")
+        if st.button("🧪 執行歷史回測", use_container_width=True):
+            res = run_simple_backtest(bt_id)
+            if res:
+                df_bt, win_rate, total_ret = res
+                c1, c2 = st.columns(2)
+                c1.metric("策略歷史勝率", f"{win_rate*100:.1f} %")
+                c2.metric("2年期累積報酬率", f"{total_ret:.1f} %")
+                
+                fig = px.line(df_bt, x=df_bt.index, y='Equity', title=f"{bt_id} 波段策略權益曲線 (起點為100)")
+                fig.update_layout(template="plotly_dark")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("資料不足，無法回測。")
 
 # ==========================================
 # 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
@@ -508,11 +606,11 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     if res:
                         star_dict[t] = res['星等'] if res['星等'] != "休息" else "☁️ 盤整/休息"
                         price_dict[t] = res['收盤']
-                        warning_dict[t] = res.get('處置風險', "✅ 安全")
+                        warning_dict[t] = res.get('處置與籌碼風險', "✅ 安全")
                     else:
                         star_dict[t] = "☁️ 盤整/休息"
                         price_dict[t] = fetch_fast_price(t)
-                        warning_dict[t] = "✅ 安全" # 歷史不足暫不列警戒
+                        warning_dict[t] = "✅ 安全"
             
             for _, row in analyzed_df.iterrows():
                 if row['動向狀態'] == "🟢 主力連買":
@@ -522,7 +620,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             
             analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))
             analyzed_df.insert(3, '主力推估成本', analyzed_df['代號'].map(vwap_dict))
-            analyzed_df.insert(4, '處置風險', analyzed_df['代號'].map(warning_dict))
+            analyzed_df.insert(4, '處置與風險', analyzed_df['代號'].map(warning_dict))
             analyzed_df.insert(5, '六星技術評等', analyzed_df['代號'].map(star_dict))
             analyzed_df['產業族群'] = analyzed_df['代號'].map(SECTOR_MAP).fillna("其他/未分類")
 
@@ -551,13 +649,13 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
         sell_count = analyzed_df[analyzed_df['動向狀態'].str.contains('倒貨|賣')].shape[0]
         star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('⭐') >= 4)].shape[0]
-        danger_count = analyzed_df[analyzed_df['處置風險'].str.contains('高風險')].shape[0]
+        danger_count = analyzed_df[analyzed_df['處置與風險'].str.contains('風險|警戒|隔日沖')].shape[0]
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🔥 主力連買標的", f"{buy_count} 檔")
         m2.metric("🧊 經理人倒貨標的", f"{sell_count} 檔")
         m3.metric("⭐ 雙引擎共振標的", f"{star_count} 檔")
-        m4.metric("🚨 處置高風險標的", f"{danger_count} 檔", help="即將面臨處置關緊閉，禁止追高！")
+        m4.metric("🚨 處置/隔日沖警戒", f"{danger_count} 檔", help="即將面臨處置或有隔日沖砸盤風險！")
         
         st.divider()
         st.subheader("🔥 經理人持股 × 成本防護 × 雙引擎共振榜")
@@ -565,13 +663,14 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         display_df = analyzed_df.drop(columns=['連續天數', '產業族群'])
         display_df = display_df.rename(columns={'連續天數顯示': '連續天數'})
         
-        # 使用 Styler 讓表格中的高風險變紅色，安全變綠色
         def highlight_danger(val):
-            if isinstance(val, str) and '高風險' in val: return 'color: red; font-weight: bold'
-            elif isinstance(val, str) and '安全' in val: return 'color: green'
+            if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val): 
+                return 'color: red; font-weight: bold'
+            elif isinstance(val, str) and '安全' in val: 
+                return 'color: green'
             return ''
             
-        styled_df = display_df.style.map(highlight_danger, subset=['處置風險'])
+        styled_df = display_df.style.map(highlight_danger, subset=['處置與風險'])
         
         st.dataframe(
             styled_df,

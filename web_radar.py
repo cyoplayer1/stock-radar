@@ -652,7 +652,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     analyzed_df = analyze_manager_moves(raw_df)
     
     if not analyzed_df.empty:
-        with st.spinner("⚡ 正在獲取最新股價、計算主力成本，並進行處置風險判定..."):
+        with st.spinner("⚡ 正在獲取最新股價、計算主力成本與持股權重，並進行風險判定..."):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
             star_dict, price_dict, vwap_dict, warning_dict = {}, {}, {}, {}
@@ -682,6 +682,37 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df.insert(4, '處置與風險', analyzed_df['代號'].map(warning_dict))
             analyzed_df.insert(5, '六星技術評等', analyzed_df['代號'].map(star_dict))
             analyzed_df['產業族群'] = analyzed_df['代號'].map(SECTOR_MAP).fillna("其他/未分類")
+
+            # ==========================================
+            # 🌟 新增功能：計算 ETF 持股權重與加碼水位空間
+            # ==========================================
+            # 將收盤價轉為數值，以計算總市值預估值
+            analyzed_df['最新收盤價_num'] = pd.to_numeric(analyzed_df['最新收盤價'], errors='coerce').fillna(0)
+            analyzed_df['市值預估'] = analyzed_df['最新持股張數'] * analyzed_df['最新收盤價_num'] * 1000
+            total_assets = analyzed_df['市值預估'].sum()
+
+            def calc_weight_and_space(row):
+                if total_assets > 0:
+                    weight = (row['市值預估'] / total_assets) * 100
+                else:
+                    weight = 0.0
+                
+                # ⚖️ 判定持股上限 (台積電 2330 為 25%，其餘標的 10%)
+                limit = 25.0 if str(row['代號']) == "2330" else 10.0
+                space = limit - weight
+                
+                # 狀態判定 (小於 0.5% 視為滿水位，小於 2% 視為快滿)
+                if space <= 0.5:
+                    status = f"🛑 滿水位 (剩 {max(0, space):.1f}%)"
+                elif space <= 2.0:
+                    status = f"⚠️ 快滿 (剩 {space:.1f}%)"
+                else:
+                    status = f"✅ 充足 (剩 {space:.1f}%)"
+                    
+                return pd.Series([round(weight, 2), status])
+
+            analyzed_df[['預估權重(%)', '加碼空間']] = analyzed_df.apply(calc_weight_and_space, axis=1)
+            # ==========================================
 
         # 🗺️ 資金熱力圖 (自定義紅綠色系)
         st.subheader("🗺️ 資金熱力圖 (主力買賣板塊)")
@@ -719,17 +750,22 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.divider()
         st.subheader("🔥 經理人持股 × 成本防護 × 雙引擎共振榜")
         
-        display_df = analyzed_df.drop(columns=['連續天數', '產業族群'])
+        # 移除暫存的計算用欄位，整理顯示表格
+        display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估'])
         display_df = display_df.rename(columns={'連續天數顯示': '連續天數'})
         
+        # 🎨 為表格加上重點顏色警示
         def highlight_danger(val):
-            if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val): 
+            if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val or '滿水位' in val): 
                 return 'color: #ff4b4b; font-weight: bold'
-            elif isinstance(val, str) and '安全' in val: 
+            elif isinstance(val, str) and ('安全' in val or '充足' in val): 
                 return 'color: #00cc96'
+            elif isinstance(val, str) and '快滿' in val:
+                return 'color: #ffd166; font-weight: bold'
             return ''
             
-        styled_df = display_df.style.map(highlight_danger, subset=['處置與風險'])
+        # 同時將警示色套用到「處置與風險」跟「加碼空間」兩個欄位
+        styled_df = display_df.style.map(highlight_danger, subset=['處置與風險', '加碼空間'])
         
         # ⚙️ 讓表格中的「看盤連結」變成可以點擊的網頁圖示
         st.dataframe(
@@ -740,6 +776,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             column_config={
                 "今日買賣超(張)": st.column_config.NumberColumn("今日買賣超(張)", format="%d"),
                 "最新持股張數": st.column_config.NumberColumn("最新持股張數", format="%d"),
+                "預估權重(%)": st.column_config.NumberColumn("預估權重(%)", format="%.2f %%"),
                 "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
             }
         )

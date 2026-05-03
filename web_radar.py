@@ -13,6 +13,7 @@ import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 import os
 import numpy as np
+import xml.etree.ElementTree as ET  # 新增：用來解析 Google News RSS
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
@@ -23,7 +24,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 (無 UI 快取衝突版) ===
+# === 2. 🛡️ 安全連線防護機制 ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -41,7 +42,6 @@ def safe_get_json(url, headers, max_retries=3):
 # === 3. 核心指標與大盤風向球 ===
 @st.cache_data(ttl=1800)
 def get_market_breadth():
-    """獲取台股加權指數狀態，作為大盤多空風向球"""
     try:
         df = yf.Ticker("^TWII").history(period="3mo")
         if not df.empty:
@@ -110,9 +110,45 @@ def estimate_vwap(symbol, days):
     except: pass
     return "---"
 
-# === 🏢 3.5 基本面與 AI 情感引擎 ===
+# === 4. 名單字典 (完整 112 檔) ===
+STOCKS_DICT = {
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
+    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
+    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
+    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
+    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
+    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
+    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
+    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
+    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
+    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
+    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
+    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
+    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
+    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
+    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
+    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
+    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
+    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
+    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
+    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
+    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
+    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
+    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
+    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
+    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶", "6805.TW": "富世達"
+}
+
+SECTOR_MAP = {
+    "2330": "半導體", "2454": "半導體", "3661": "半導體", "3034": "半導體",
+    "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器", "2356": "AI伺服器",
+    "3017": "散熱模組", "3324": "散熱模組", "3653": "散熱模組", "6805": "軸承",
+    "2383": "PCB零組件", "2368": "PCB零組件", "3533": "連接器", "3037": "PCB零組件",
+    "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
+}
+
+# === 🏢 3.5 升級版：Google News RSS 與 AI 情感引擎 ===
 def get_fundamentals_and_news(symbol):
-    """獲取營收 YoY、EPS 與近期新聞"""
     try:
         tkr = yf.Ticker(f"{symbol}.TW")
         info = tkr.info
@@ -123,12 +159,24 @@ def get_fundamentals_and_news(symbol):
         eps = info.get('trailingEps', '---')
         pe = info.get('trailingPE', '---')
         rev_growth = info.get('revenueGrowth', None)
-        if rev_growth is not None:
-            rev_growth_str = f"{rev_growth * 100:.2f} %"
-        else:
-            rev_growth_str = "---"
+        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else "---"
+        
+        # 🚀 強力新聞引擎：Google News 繁體中文爬蟲
+        news = []
+        try:
+            name = STOCKS_DICT.get(f"{symbol}.TW", STOCKS_DICT.get(f"{symbol}.TWO", "")).replace(" ", "")
+            query = f"{symbol}+{name}+股市"
+            url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            res = requests.get(url, headers=HEADERS, timeout=5)
+            root = ET.fromstring(res.content)
+            for item in root.findall('.//item')[:5]:
+                title = item.find('title').text
+                # 去除 Google News 標題後方常見的 "- Yahoo奇摩股市" 等雜訊
+                clean_title = title.rsplit(' - ', 1)[0]
+                news.append({'title': clean_title})
+        except Exception as e:
+            pass
             
-        news = tkr.news[:5] if tkr.news else []
         return eps, pe, rev_growth_str, news
     except:
         return "---", "---", "---", []
@@ -138,8 +186,8 @@ def ai_news_sentiment(news_list):
     if not news_list:
         return "⚪ 尚無近期外電或財經新聞可供分析。"
     
-    pos_words = ['增', '漲', '高', '好', '優', '強', '大單', '受惠', '利多', '新高', '突破', '成長', '看好']
-    neg_words = ['減', '跌', '低', '壞', '差', '弱', '砍單', '衰退', '利空', '破底', '下修', '看壞', '不如預期']
+    pos_words = ['增', '漲', '高', '好', '優', '強', '大單', '受惠', '利多', '新高', '突破', '成長', '看好', '買超', '雙增', '季增']
+    neg_words = ['減', '跌', '低', '壞', '差', '弱', '砍單', '衰退', '利空', '破底', '下修', '看壞', '不如預期', '賣超', '雙減']
     
     score = 0
     titles = []
@@ -159,7 +207,7 @@ def ai_news_sentiment(news_list):
         conclusion = "🟡 **【AI 情感判定：中性】** 近期新聞無極端多空方向，請回歸技術面與籌碼面操作。"
         
     summary = "\n".join([f"- {t}" for t in titles])
-    return f"{conclusion}\n\n**📰 近期重要新聞標題抓取：**\n{summary}"
+    return f"{conclusion}\n\n**📰 近期熱門新聞標題抓取：**\n{summary}"
 
 @st.cache_data(ttl=3600)
 def get_inst_data():
@@ -202,44 +250,7 @@ def get_hot_rank_ids():
     except: pass
     return hot_ids
 
-# === 4. 名單字典 (完整 112 檔精選) ===
-STOCKS_DICT = {
-    "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
-    "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
-    "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
-    "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
-    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
-    "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
-    "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
-    "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
-    "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁",
-    "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電",
-    "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電",
-    "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城",
-    "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新",
-    "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼",
-    "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大",
-    "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
-    "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
-    "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
-    "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
-    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
-    "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
-    "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
-    "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
-    "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
-    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶", "6805.TW": "富世達"
-}
-
-SECTOR_MAP = {
-    "2330": "半導體", "2454": "半導體", "3661": "半導體", "3034": "半導體",
-    "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器", "2356": "AI伺服器",
-    "3017": "散熱模組", "3324": "散熱模組", "3653": "散熱模組", "6805": "軸承",
-    "2383": "PCB零組件", "2368": "PCB零組件", "3533": "連接器", "3037": "PCB零組件",
-    "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
-}
-
-# === 5. 雷達掃描與診斷邏輯 (加入處置警戒 & 隔日沖警戒) ===
+# === 5. 雷達掃描與診斷邏輯 ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -261,12 +272,9 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         df['MA5'] = df['Close'].rolling(5).mean(); df['MA20'] = df['Close'].rolling(20).mean(); df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df); df = calculate_macd(df)
         
-        # 🚨 處置股預判演算法：5日漲幅 > 25% 或 月線乖離 > 30%
         return_5d = (c / df['Close'].iloc[-6]) - 1 if len(df) >= 6 else 0
         bias_20 = (c / df['MA20'].iloc[-1]) - 1
         is_warning = return_5d > 0.25 or bias_20 > 0.30
-        
-        # 🪤 隔日沖警戒演算法：今日爆量3倍且留長上影線 (高點離收盤>4%)
         upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
         is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
         
@@ -281,26 +289,19 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if clean in hot_list: tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
-        
         if is_warning: tags.append("🚨[處置警戒]")
         if is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]")
         
         inst_display = f"{inst_val:,}" if inst_val != 0 else "--"
         name = STOCKS_DICT.get(tid, clean)
-        
         risk_level = "✅ 安全"
         if is_warning: risk_level = "🚨 高風險 (處置前兆)"
         elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
         
         return {
-            '標的': f"{clean} {name}", 
-            '星等': "⭐"*s if s>0 else "休息", 
-            '收盤': round(c,2), 
-            '籌碼大戶(張)': inst_display, 
-            '今日量(張)': int(v/1000), 
-            '觸發條件': " ".join(tags), 
-            '星星數': s,
-            '處置與籌碼風險': risk_level
+            '標的': f"{clean} {name}", '星等': "⭐"*s if s>0 else "休息", '收盤': round(c,2), 
+            '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': " ".join(tags), 
+            '星星數': s, '處置與籌碼風險': risk_level
         }
     except: return None
 
@@ -331,7 +332,6 @@ def diagnose_holding(ticker_in):
         }
     except: return None
 
-# === 回測引擎 ===
 def run_simple_backtest(symbol):
     try:
         tid = f"{symbol}.TW"
@@ -394,28 +394,19 @@ def get_00981a_holdings_history(force_refresh=False):
     elif df_history.empty:
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
         dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
-        
         mock_scenarios = [
-            ("2317", "鴻海", [1000, 1500, 2000, 3000]),
-            ("3231", "緯創", [2000, 2000, 2000, 3500]),
-            ("2383", "台光電", [3000, 3000, 3500, 4200]),
-            ("6805", "富世達", [200, 400, 800, 1500]), 
-            ("3017", "奇鋐", [800, 800, 1200, 1800]),
-            ("2345", "智邦", [1000, 1200, 1500, 1900]),
-            ("3533", "嘉澤", [600, 600, 700, 900]),
-            ("2330", "台積電", [8000, 8000, 8000, 8000]),
-            ("2454", "聯發科", [1500, 1500, 1500, 1500]),
-            ("3324", "雙鴻", [500, 500, 500, 500]),
-            ("2308", "台達電", [5000, 5200, 5500, 4500]),
-            ("2382", "廣達", [4000, 4000, 3000, 2000]),
-            ("3034", "聯詠", [1000, 1000, 800, 500]),
-            ("2603", "長榮", [5000, 4000, 3000, 2000]),
-            ("3661", "世芯-KY", [400, 400, 400, 200]),
+            ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
+            ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
+            ("3017", "奇鋐", [800, 800, 1200, 1800]), ("2345", "智邦", [1000, 1200, 1500, 1900]),
+            ("3533", "嘉澤", [600, 600, 700, 900]), ("2330", "台積電", [8000, 8000, 8000, 8000]),
+            ("2454", "聯發科", [1500, 1500, 1500, 1500]), ("3324", "雙鴻", [500, 500, 500, 500]),
+            ("2308", "台達電", [5000, 5200, 5500, 4500]), ("2382", "廣達", [4000, 4000, 3000, 2000]),
+            ("3034", "聯詠", [1000, 1000, 800, 500]), ("2603", "長榮", [5000, 4000, 3000, 2000]),
+            ("3661", "世芯-KY", [400, 400, 400, 200])
         ]
         dummy_rows = []
         for ticker, name, shares in mock_scenarios:
-            for i, d in enumerate(dates):
-                dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
+            for i, d in enumerate(dates): dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
         return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
     return df_history
 
@@ -423,7 +414,6 @@ def analyze_manager_moves(df):
     if df.empty: return pd.DataFrame()
     df = df.sort_values(by=['代號', '日期'])
     df['單日買賣超(張)'] = df.groupby('代號')['持有張數'].diff().fillna(0)
-    
     results = []
     for stock_id, group in df.groupby('代號'):
         group = group.sort_values('日期')
@@ -440,23 +430,16 @@ def analyze_manager_moves(df):
             else: break
                 
         latest_record = group.iloc[-1]
-        
         if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
-        elif consecutive_sell > 0: status, days = "🔴 經理倒貨", consecutive_sell
+        elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
         else: status, days = "⚪ 靜止觀望", 0
             
         results.append({
-            "代號": stock_id,
-            "股票名稱": latest_record['股票名稱'],
-            "最新持股張數": int(latest_record['持有張數']),
-            "今日買賣超(張)": int(latest_record['單日買賣超(張)']),
-            "動向狀態": status,
-            "連續天數": days,
+            "代號": stock_id, "股票名稱": latest_record['股票名稱'], "最新持股張數": int(latest_record['持有張數']),
+            "今日買賣超(張)": int(latest_record['單日買賣超(張)']), "動向狀態": status, "連續天數": days,
             "連續天數顯示": f"{days} 天" if days > 0 else "-"
         })
-        
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
-
 
 # === 7. 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 導覽選單")
@@ -466,18 +449,13 @@ st.sidebar.subheader("🌍 大盤多空風向球")
 tw_c, tw_m20, tw_status = get_market_breadth()
 if tw_c:
     st.sidebar.metric("加權指數", f"{tw_c:,.0f}")
-    if "綠" in tw_status or "多" in tw_status:
-        st.sidebar.success(tw_status)
-    else:
-        st.sidebar.error(tw_status)
+    if "綠" in tw_status or "多" in tw_status: st.sidebar.success(tw_status)
+    else: st.sidebar.error(tw_status)
 else:
     st.sidebar.write("大盤資料讀取中...")
 st.sidebar.markdown("---")
 
-main_page = st.sidebar.radio(
-    "跳轉頁面", 
-    ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"]
-)
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
 
 if main_page == "🎯 股神六星雷達系統":
     st.sidebar.subheader("⚙️ 自選股水庫")
@@ -566,7 +544,7 @@ if main_page == "🎯 股神六星雷達系統":
             if r:
                 st.markdown(f"### 🎯 {r['標的']} 戰情室")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("即時價", r['收盤']); c2.metric("5日均線", r['MA5'])
+                c1.metric("即時價", r['收盤']); c2.metric("5日線", r['MA5'])
                 c3.metric("月線 (防守點)", r['MA20']); c4.metric("KD狀態", r['KD'])
                 
                 price = r['收盤']
@@ -587,7 +565,6 @@ if main_page == "🎯 股神六星雷達系統":
                     * **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。
                     """)
                     
-                    # 💧 流動性滑價防禦網
                     if suggested_shares > (v5_avg * 0.01):
                         st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！大資金進出將產生嚴重滑價，建議降低部位或分批建倉！")
 
@@ -598,7 +575,6 @@ if main_page == "🎯 股神六星雷達系統":
             hot_list = get_hot_rank_ids()
             danger_list = []
             pb = st.progress(0)
-            
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
@@ -606,7 +582,6 @@ if main_page == "🎯 股神六星雷達系統":
                     res = f.result()
                     if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']):
                         danger_list.append(res)
-            
             if danger_list:
                 df_danger = pd.DataFrame(danger_list)
                 st.error(f"🚨 **發現 {len(df_danger)} 檔高風險標的！請避免追高！**")
@@ -625,7 +600,6 @@ if main_page == "🎯 股神六星雷達系統":
                 c1, c2 = st.columns(2)
                 c1.metric("策略歷史勝率", f"{win_rate*100:.1f} %")
                 c2.metric("2年期累積報酬率", f"{total_ret:.1f} %")
-                
                 fig = px.line(df_bt, x=df_bt.index, y='Equity', title=f"{bt_id} 波段策略權益曲線 (起點為100)")
                 fig.update_layout(template="plotly_dark")
                 st.plotly_chart(fig, use_container_width=True)
@@ -637,19 +611,16 @@ if main_page == "🎯 股神六星雷達系統":
         st.markdown("結合企業獲利動能與最新市場消息，打造「技術＋籌碼＋基本面＋消息面」四維防護。")
         f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2330", key="fund_in")
         if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
-            with st.spinner("⚡ 正在爬取最新財報數據與外電新聞..."):
+            with st.spinner("⚡ 正在爬取最新財報數據與 Google News 外電新聞..."):
                 eps, pe, rev, news_list = get_fundamentals_and_news(f_id)
                 ai_report = ai_news_sentiment(news_list)
-                
                 st.markdown(f"#### 📊 {f_id} 核心基本面數據")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("近四季 EPS (元)", eps)
                 c2.metric("本益比 (P/E)", pe)
                 c3.metric("最新營收年增率 (YoY)", rev)
-                
-                if rev != "---" and float(rev.replace('%','')) > 10:
+                if rev != "---" and float(rev.replace('%','').strip()) > 10:
                     st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
-                
                 st.divider()
                 st.markdown("#### 🧠 AI 消息面情感解析")
                 st.info(ai_report)
@@ -659,7 +630,6 @@ if main_page == "🎯 股神六星雷達系統":
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")
-    
     force_refresh = st.button("🔄 強制重新抓取今日籌碼")
     
     raw_df = get_00981a_holdings_history(force_refresh=force_refresh)
@@ -669,7 +639,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         with st.spinner("⚡ 正在獲取最新股價、計算主力成本，並進行處置風險判定..."):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
-            
             star_dict, price_dict, vwap_dict, warning_dict = {}, {}, {}, {}
             
             with ThreadPoolExecutor(max_workers=8) as ex:
@@ -698,7 +667,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df.insert(5, '六星技術評等', analyzed_df['代號'].map(star_dict))
             analyzed_df['產業族群'] = analyzed_df['代號'].map(SECTOR_MAP).fillna("其他/未分類")
 
-        # 🗺️ 資金熱力圖
+        # 🗺️ 資金熱力圖 (自定義紅綠色系)
         st.subheader("🗺️ 資金熱力圖 (主力買賣板塊)")
         try:
             heat_df = analyzed_df[analyzed_df['今日買賣超(張)'] != 0].copy()
@@ -708,9 +677,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     path=[px.Constant("全市場動向"), '產業族群', '股票名稱'],
                     values=heat_df['今日買賣超(張)'].abs(),
                     color='今日買賣超(張)', 
-                    color_continuous_scale='RdYlGn',
+                    color_continuous_scale=['#00cc96', '#262730', '#ff4b4b'], # 綠色(賣出) -> 深色(平盤) -> 紅色(買進)
                     color_continuous_midpoint=0,
-                    title="板塊面積大小代表張數，綠色代表買進，紅色代表賣出"
+                    title="板塊面積大小代表張數，紅色代表買進，綠色代表賣出 (台股慣例)"
                 )
                 fig.update_traces(textinfo="label+value")
                 st.plotly_chart(fig, use_container_width=True)
@@ -727,7 +696,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🔥 主力連買標的", f"{buy_count} 檔")
-        m2.metric("🧊 經理倒貨標的", f"{sell_count} 檔")
+        m2.metric("🧊 經理人倒貨標的", f"{sell_count} 檔")
         m3.metric("⭐ 雙引擎共振標的", f"{star_count} 檔")
         m4.metric("🚨 處置/隔日沖警戒", f"{danger_count} 檔", help="即將面臨處置或有隔日沖砸盤風險！")
         

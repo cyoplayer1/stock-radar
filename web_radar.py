@@ -488,14 +488,37 @@ if main_page == "🎯 股神六星雷達系統":
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
+                display_df = df[['標的', '看盤連結', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']]
+                
+                # 🎨 幫六星雷達加上專屬的標註警示色！
+                def highlight_tags(val):
+                    if isinstance(val, str):
+                        # 負面/高風險標註 (紅色)
+                        if '風險' in val or '警戒' in val or '隔日沖' in val or '🚨' in val or '🪤' in val: 
+                            return 'color: #ff4b4b; font-weight: bold'
+                        # 安全標註 (綠色)
+                        elif '安全' in val: 
+                            return 'color: #00cc96'
+                        # 觸發條件與熱門標註 (黃/橘色高光)
+                        elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val:
+                            return 'color: #ffd166; font-weight: bold'
+                    return ''
+                    
+                # 將顏色套用到風險與觸發條件欄位
+                styled_df = display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件'])
+                
                 # ⚙️ 讓表格中的「看盤連結」變成可以點擊的網頁圖示
                 st.dataframe(
-                    df[['標的', '看盤連結', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']], 
+                    styled_df, 
                     use_container_width=True,
+                    hide_index=True, # 隱藏最左邊醜醜的數字索引
+                    height=580,
                     column_config={
                         "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
                     }
                 )
+            else:
+                st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
 
     with t2:
         st.markdown("### 💰 量能先行：主力足跡")

@@ -286,6 +286,14 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
+        # === 👑 張宇明專屬邏輯：看懂當下架構 (底底高、頭頭高) ===
+        is_higher_low = df['Low'].iloc[-1] >= df['Low'].iloc[-2]
+        is_higher_high = df['High'].iloc[-1] > df['High'].iloc[-2]
+        is_above_ma20 = c > df['MA20'].iloc[-1] # 需有月線保護
+        if is_higher_low and is_higher_high and is_above_ma20:
+            s+=1
+            tags.append("👑[宇明多頭架構]")
+            
         if clean in hot_list: tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
@@ -301,8 +309,12 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         # 🔗 建立外連技術線圖網址
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean}/technical-analysis"
         
+        # 星等上限調整：如果有宇明架構加持，星星數可能超過6顆，我們把它統一轉換成視覺星號
+        star_display = "⭐"*s if s>0 else "休息"
+        if s >= 7: star_display = "🌟"*7 # 若全數符合(含宇明邏輯)，給予特殊大星
+        
         return {
-            '標的': f"{clean} {name}", '看盤連結': chart_url, '星等': "⭐"*s if s>0 else "休息", '收盤': round(c,2), 
+            '標的': f"{clean} {name}", '看盤連結': chart_url, '星等': star_display, '收盤': round(c,2), 
             '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': " ".join(tags), 
             '星星數': s, '處置與籌碼風險': risk_level
         }
@@ -500,7 +512,7 @@ if main_page == "🎯 股神六星雷達系統":
                         elif '安全' in val: 
                             return 'color: #00cc96'
                         # 觸發條件與熱門標註 (黃/橘色高光)
-                        elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val:
+                        elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val or '👑' in val:
                             return 'color: #ffd166; font-weight: bold'
                     return ''
                     

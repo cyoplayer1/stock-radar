@@ -23,24 +23,25 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 ===
+# === 2. 🛡️ 安全連線防護機制 (無 UI 快取衝突版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False)
             response.raise_for_status() 
             return response.json()
-        except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
+        except (ChunkedEncodingError, ConnectionError, ReadTimeout):
             time.sleep(2)
         except ValueError:
             break
-        except Exception as e:
+        except Exception:
             break
     return {}
 
-# === 3. 核心計算函數與大盤風向球 ===
+# === 3. 核心指標與大盤風向球 ===
 @st.cache_data(ttl=1800)
 def get_market_breadth():
+    """獲取台股加權指數狀態，作為大盤多空風向球"""
     try:
         df = yf.Ticker("^TWII").history(period="3mo")
         if not df.empty:
@@ -109,7 +110,7 @@ def estimate_vwap(symbol, days):
     except: pass
     return "---"
 
-# === 🏢 3&4. 基本面與 AI 情感引擎 ===
+# === 🏢 3.5 基本面與 AI 情感引擎 ===
 def get_fundamentals_and_news(symbol):
     """獲取營收 YoY、EPS 與近期新聞"""
     try:
@@ -137,7 +138,6 @@ def ai_news_sentiment(news_list):
     if not news_list:
         return "⚪ 尚無近期外電或財經新聞可供分析。"
     
-    # 建立多空關鍵字辭典
     pos_words = ['增', '漲', '高', '好', '優', '強', '大單', '受惠', '利多', '新高', '突破', '成長', '看好']
     neg_words = ['減', '跌', '低', '壞', '差', '弱', '砍單', '衰退', '利空', '破底', '下修', '看壞', '不如預期']
     
@@ -202,7 +202,7 @@ def get_hot_rank_ids():
     except: pass
     return hot_ids
 
-# === 4. 名單字典 (完整 112 檔) ===
+# === 4. 名單字典 (完整 112 檔精選) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -228,18 +228,18 @@ STOCKS_DICT = {
     "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
     "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
     "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", 
-    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶"
+    "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶", "6805.TW": "富世達"
 }
 
 SECTOR_MAP = {
     "2330": "半導體", "2454": "半導體", "3661": "半導體", "3034": "半導體",
     "2317": "AI伺服器", "3231": "AI伺服器", "2382": "AI伺服器", "2356": "AI伺服器",
-    "3017": "散熱模組", "3324": "散熱模組", "3653": "散熱模組",
+    "3017": "散熱模組", "3324": "散熱模組", "3653": "散熱模組", "6805": "軸承",
     "2383": "PCB零組件", "2368": "PCB零組件", "3533": "連接器", "3037": "PCB零組件",
     "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
 }
 
-# === 5. 雷達掃描與診斷邏輯 ===
+# === 5. 雷達掃描與診斷邏輯 (加入處置警戒 & 隔日沖警戒) ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -261,9 +261,12 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         df['MA5'] = df['Close'].rolling(5).mean(); df['MA20'] = df['Close'].rolling(20).mean(); df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df); df = calculate_macd(df)
         
+        # 🚨 處置股預判演算法：5日漲幅 > 25% 或 月線乖離 > 30%
         return_5d = (c / df['Close'].iloc[-6]) - 1 if len(df) >= 6 else 0
         bias_20 = (c / df['MA20'].iloc[-1]) - 1
         is_warning = return_5d > 0.25 or bias_20 > 0.30
+        
+        # 🪤 隔日沖警戒演算法：今日爆量3倍且留長上影線 (高點離收盤>4%)
         upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
         is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
         
@@ -278,6 +281,7 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if clean in hot_list: tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
+        
         if is_warning: tags.append("🚨[處置警戒]")
         if is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]")
         
@@ -314,14 +318,20 @@ def diagnose_holding(ticker_in):
         df['MA5'] = df['Close'].rolling(5).mean(); df['MA20'] = df['Close'].rolling(20).mean(); df = calculate_kd(df)
         c, m5, m20 = df['Close'].iloc[-1], df['MA5'].iloc[-1], df['MA20'].iloc[-1]
         k, d = df['K'].iloc[-1], df['D'].iloc[-1]
+        v5_lots = int(df['Volume'].iloc[-6:-1].mean() / 1000)
+        
         status, action = [], "🟢 續抱 (趨勢健康)"
         if c < m20: status.append("⚠️ 跌破月線"); action = "🛑 建議停損/停利"
         elif c < m5: status.append("⚠️ 跌破5日線"); action = "🟡 建議先減碼一半"
         if k < d and df['K'].iloc[-2] >= df['D'].iloc[-2] and k > 70: status.append("⚠️ KD高檔死叉"); action = "🟡 建議拔檔減碼"
         if not status: status.append("✅ 強勢多頭")
-        return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action}
+        return {
+            "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
+            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
+        }
     except: return None
 
+# === 回測引擎 ===
 def run_simple_backtest(symbol):
     try:
         tid = f"{symbol}.TW"
@@ -432,7 +442,7 @@ def analyze_manager_moves(df):
         latest_record = group.iloc[-1]
         
         if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
-        elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
+        elif consecutive_sell > 0: status, days = "🔴 經理倒貨", consecutive_sell
         else: status, days = "⚪ 靜止觀望", 0
             
         results.append({
@@ -556,11 +566,12 @@ if main_page == "🎯 股神六星雷達系統":
             if r:
                 st.markdown(f"### 🎯 {r['標的']} 戰情室")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("即時價", r['收盤']); c2.metric("5日線", r['MA5'])
+                c1.metric("即時價", r['收盤']); c2.metric("5日均線", r['MA5'])
                 c3.metric("月線 (防守點)", r['MA20']); c4.metric("KD狀態", r['KD'])
                 
                 price = r['收盤']
                 stop_loss = r['MA20']
+                v5_avg = r['5日均量']
                 
                 if price <= stop_loss:
                     st.error("⚠️ **目前股價已低於月線，趨勢轉弱，強烈建議不要買進！**")
@@ -575,6 +586,10 @@ if main_page == "🎯 股神六星雷達系統":
                     * **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。
                     * **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。
                     """)
+                    
+                    # 💧 流動性滑價防禦網
+                    if suggested_shares > (v5_avg * 0.01):
+                        st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！大資金進出將產生嚴重滑價，建議降低部位或分批建倉！")
 
     with t5:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
@@ -712,7 +727,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🔥 主力連買標的", f"{buy_count} 檔")
-        m2.metric("🧊 經理人倒貨標的", f"{sell_count} 檔")
+        m2.metric("🧊 經理倒貨標的", f"{sell_count} 檔")
         m3.metric("⭐ 雙引擎共振標的", f"{star_count} 檔")
         m4.metric("🚨 處置/隔日沖警戒", f"{danger_count} 檔", help="即將面臨處置或有隔日沖砸盤風險！")
         
@@ -724,9 +739,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         
         def highlight_danger(val):
             if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val): 
-                return 'color: red; font-weight: bold'
+                return 'color: #ff4b4b; font-weight: bold'
             elif isinstance(val, str) and '安全' in val: 
-                return 'color: green'
+                return 'color: #00cc96'
             return ''
             
         styled_df = display_df.style.map(highlight_danger, subset=['處置與風險'])

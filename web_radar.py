@@ -485,10 +485,21 @@ if main_page == "🎯 股神六星雷達系統":
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：四維共振・真・大滿配終極版")
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs(["🎯 六星雷達", "💰 成交排行", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
+        
+        # --- 💡 新增：系統操盤核心心法 ---
+        st.info("""
+        💡 **【系統操盤核心心法】**
+        1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
+        2. **一眼定多空**：底底高、頭頭高就是多頭；只做多頭排列的股票，空頭連看都不要看！
+        3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
+        4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。
+        """)
+        # ---------------------------------
+        
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
@@ -533,36 +544,6 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
 
     with t2:
-        st.markdown("### 💰 量能先行：主力足跡")
-        if st.button("🔄 刷新排行"): st.cache_data.clear()
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("📈 上市排行")
-            url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
-            res = safe_get_json(url, HEADERS) 
-            if res and 'tables' in res:
-                for table in res['tables']:
-                    if '證券代號' in table.get('fields', []):
-                        df1 = pd.DataFrame(table['data'], columns=table['fields'])
-                        df1['值'] = pd.to_numeric(df1['成交金額'].str.replace(',',''), errors='coerce')
-                        d15 = df1.sort_values('值', ascending=False).head(15).copy()
-                        d15['金額'] = d15['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-                        st.table(d15[['證券代號','證券名稱','金額']].reset_index(drop=True))
-                        break
-        with c2:
-            st.subheader("📉 上櫃排行")
-            url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
-            res = safe_get_json(url, HEADERS) 
-            data_otc = res.get('aaData', []) or (res.get('tables', [{}])[0].get('data', []) if res and 'tables' in res else [])
-            if data_otc:
-                df2 = pd.DataFrame(data_otc)
-                cv = 9 if df2.shape[1] >= 10 else df2.shape[1] - 2
-                df2['值'] = pd.to_numeric(df2[cv].astype(str).str.replace(',',''), errors='coerce')
-                d15b = df2.sort_values('值', ascending=False).head(15).copy()
-                d15b['金額'] = d15b['值'].apply(lambda x: f"{int(x/100000000):,} 億")
-                st.table(d15b[[0, 1, '金額']].rename(columns={0:'證券代號', 1:'證券名稱'}).reset_index(drop=True))
-
-    with t3:
         st.markdown("### 📈 互動圖表：型態確認")
         sid = st.text_input("🔍 代號", value="2330", key="chart_in")
         if st.button("📈 繪圖", use_container_width=True):
@@ -577,7 +558,7 @@ if main_page == "🎯 股神六星雷達系統":
                 fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-    with t4:
+    with t3:
         st.markdown("### 🛡️ 智能部位計算機與紀律診斷")
         col_diag, col_calc = st.columns([1, 1])
         with col_diag:
@@ -615,7 +596,7 @@ if main_page == "🎯 股神六星雷達系統":
                     if suggested_shares > (v5_avg * 0.01):
                         st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！大資金進出將產生嚴重滑價，建議降低部位或分批建倉！")
 
-    with t5:
+    with t4:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
         if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
             inst_map = get_inst_data()
@@ -640,7 +621,7 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
 
-    with t6:
+    with t5:
         st.markdown("### 🧪 策略回測實驗室 (2年期)")
         st.markdown("驗證『突破月線買進、跌破月線賣出』的波段策略，在過去兩年套用於該股票的真實績效。")
         bt_id = st.text_input("🔍 欲回測標的代號", value="2317", key="bt_in")
@@ -657,7 +638,7 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.warning("資料不足，無法回測。")
 
-    with t7:
+    with t6:
         st.markdown("### 🏢 基本面濾網與 AI 財報新聞分析")
         st.markdown("結合企業獲利動能與最新市場消息，打造「技術＋籌碼＋基本面＋消息面」四維防護。")
         f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2330", key="fund_in")

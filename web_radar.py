@@ -19,17 +19,8 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
 
-# 一般 API 用的 Header
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
-
-# 🛡️ 證交所專用的超強偽裝 Header
-TWSE_HEADERS = {
-    "User-Agent": UA,
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.twse.com.tw/"
-}
 
 # 🔑 全新富果 API 金鑰
 FUGLE_API_KEY = "YzkzZmUzNjItN2VlYy00MWZhLTllMGYtMjgxODk3YjhiNGVmIDJkOGEyOGUwLWUyNTItNDBjNi04OTRjLTljMmRiOTgyMTZjMA=="
@@ -57,7 +48,7 @@ def get_and_increment_view_count():
             
     return count
 
-# === 3. 🛡️ 安全連線防護機制 ===
+# === 3. 🛡️ 安全連線防護機制 (強化版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -78,7 +69,7 @@ def safe_get_json(url, headers, max_retries=3):
             break
     return {}
 
-# === 4. 核心指標與大盤風向球 ===
+# === 4. 核心指標與大盤風向球 (終極即時版) ===
 @st.cache_data(ttl=60)
 def get_market_breadth():
     try:
@@ -422,29 +413,19 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (本機直連真實資料版) ===
+# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (還原測試預覽版) ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
-    url = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
-    
-    try:
-        res = requests.get(url, headers=TWSE_HEADERS, timeout=15, verify=False)
-        if res.status_code == 200:
-            try:
-                data = res.json()
-                if 'data' in data and len(data['data']) > 0:
-                    for row in data['data']:
-                        ticker = str(row[0]).strip()
-                        name = str(row[1]).strip()
-                        shares = int(row[2].replace(',', '')) // 1000 
-                        new_data.append([today, ticker, name, shares])
-                    return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
-            except Exception:
-                st.warning("⚠️ 證交所 API 回應異常，可能處於半夜維護時間，請稍後再試。")
-    except Exception as e:
-        st.error(f"❌ 網路連線錯誤: {e}")
-    return pd.DataFrame()
+    url_twse = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
+    res = safe_get_json(url_twse, HEADERS)
+    if res and 'data' in res and len(res['data']) > 0:
+        for row in res['data']:
+            ticker = str(row[0]).strip()
+            name = str(row[1]).strip()
+            shares = int(row[2].replace(',', '')) // 1000 
+            new_data.append([today, ticker, name, shares])
+    return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
 def get_00981a_holdings_history(force_refresh=False):
     db_path = "00981A_holdings_db.csv"
@@ -461,20 +442,31 @@ def get_00981a_holdings_history(force_refresh=False):
     if force_refresh and not df_history.empty:
         df_history = df_history[df_history['日期'] != today_str]
             
-    with st.spinner("🔄 正在從台灣證交所獲取 00981A 今日最新真實持股..."):
+    with st.spinner("🔄 正在從連線獲取經理人今日最新持股..."):
         df_today = fetch_today_holdings_from_api("00981A")
         
     if not df_today.empty:
         df_history = pd.concat([df_history, df_today], ignore_index=True)
-        df_history = df_history.drop_duplicates(subset=['日期', '代號'], keep='last')
-        df_history.to_csv(db_path, index=False, encoding='utf-8-sig')
-        st.toast("✅ 今日真實持股資料已更新入庫！", icon="🎉")
-    else:
-        if df_history.empty:
-            st.error("🚨 警告：無法取得任何資料！請確認網路是否正常，或證交所是否正在維護中。")
-        else:
-            st.warning("⚠️ 今日資料尚未更新，目前為您顯示先前的最新紀錄。")
-            
+        df_history.to_csv(db_path, index=False)
+        st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
+    elif df_history.empty:
+        # 🔥 如果 API 被擋抓不到資料，自動進入火力全開測試模式
+        st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
+        dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
+        mock_scenarios = [
+            ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
+            ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
+            ("3017", "奇鋐", [800, 800, 1200, 1800]), ("2345", "智邦", [1000, 1200, 1500, 1900]),
+            ("3533", "嘉澤", [600, 600, 700, 900]), ("2330", "台積電", [8000, 8000, 8000, 8000]),
+            ("2454", "聯發科", [1500, 1500, 1500, 1500]), ("3324", "雙鴻", [500, 500, 500, 500]),
+            ("2308", "台達電", [5000, 5200, 5500, 4500]), ("2382", "廣達", [4000, 4000, 3000, 2000]),
+            ("3034", "聯詠", [1000, 1000, 800, 500]), ("2603", "長榮", [5000, 4000, 3000, 2000]),
+            ("3661", "世芯-KY", [400, 400, 400, 200])
+        ]
+        dummy_rows = []
+        for ticker, name, shares in mock_scenarios:
+            for i, d in enumerate(dates): dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
+        return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
     return df_history
 
 def analyze_manager_moves(df):
@@ -541,7 +533,6 @@ if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_wid
     time.sleep(1)
     st.rerun()
 
-# 顯示累積瀏覽次數
 view_count = get_and_increment_view_count()
 st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 
@@ -568,7 +559,7 @@ if main_page == "🎯 股神六星雷達系統":
             hot_list = get_hot_rank_ids()
             
             if not inst_map or not hot_list:
-                st.warning("⚠️ 警告：無法從台灣證交所取得大戶與熱門資料，將進行無籌碼掃描！")
+                st.warning("⚠️ 警告：無法從台灣證交所取得大戶與熱門資料 (可能 IP 遭封鎖)，將進行無籌碼掃描！")
                 
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
@@ -729,8 +720,6 @@ if main_page == "🎯 股神六星雷達系統":
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")
-    
-    # 只要是在本機執行，按下按鈕就會立刻直連證交所抓真實資料！
     force_refresh = st.button("🔄 強制重新抓取今日籌碼")
     
     raw_df = get_00981a_holdings_history(force_refresh=force_refresh)
@@ -771,6 +760,10 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df['最新收盤價_num'] = pd.to_numeric(analyzed_df['最新收盤價'], errors='coerce').fillna(0)
             analyzed_df['市值預估'] = analyzed_df['最新持股張數'] * analyzed_df['最新收盤價_num'] * 1000
             total_assets = analyzed_df['市值預估'].sum()
+            
+            # 🔥 測試模式專屬修復：將總資產放大3倍，修正「滿水位 28%」的不合理權重
+            if not analyzed_df.empty and "測試" in str(analyzed_df['股票名稱'].iloc[0]):
+                total_assets = total_assets * 3
 
             def calc_weight_and_space(row):
                 if total_assets > 0:
@@ -852,3 +845,5 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
             }
         )
+    else:
+        st.warning("目前尚未收集到足夠的歷史資料，或今日 API 獲取失敗，請稍後再試。")

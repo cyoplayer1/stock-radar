@@ -12,9 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 import os
-import numpy as np
 import xml.etree.ElementTree as ET
-import traceback
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
@@ -108,10 +106,12 @@ def fetch_fast_price(symbol):
         if not df.empty: return round(df['Close'].iloc[-1], 2)
     except Exception as e: 
         print(f"快速抓價失敗 {symbol}: {e}")
-    return "---"
+    # 🔥 修復：將 "---" 改為 None
+    return None
 
 def estimate_vwap(symbol, days):
-    if days <= 0 or not isinstance(days, int): return "---"
+    # 🔥 修復：將 "---" 改為 None
+    if days <= 0 or not isinstance(days, int): return None
     try:
         df = yf.Ticker(f"{symbol}.TW").history(period="1mo")
         if df.empty: df = yf.Ticker(f"{symbol}.TWO").history(period="1mo")
@@ -120,7 +120,7 @@ def estimate_vwap(symbol, days):
             vwap = (recent['Close'] * recent['Volume']).sum() / recent['Volume'].sum()
             return round(vwap, 2)
     except: pass
-    return "---"
+    return None
 
 # === 🏢 3.5 升級版：新聞超連結與 AI 情感引擎 ===
 def get_fundamentals_and_news(symbol):
@@ -131,10 +131,11 @@ def get_fundamentals_and_news(symbol):
             tkr = yf.Ticker(f"{symbol}.TWO")
             info = tkr.info
         
-        eps = info.get('trailingEps', '---')
-        pe = info.get('trailingPE', '---')
+        # 🔥 修復：將 "---" 改為 None
+        eps = info.get('trailingEps', None)
+        pe = info.get('trailingPE', None)
         rev_growth = info.get('revenueGrowth', None)
-        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else "---"
+        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else None
         
         news = []
         try:
@@ -154,7 +155,7 @@ def get_fundamentals_and_news(symbol):
         return eps, pe, rev_growth_str, news
     except Exception as e:
         print(f"基本面抓取失敗 {symbol}: {e}")
-        return "---", "---", "---", []
+        return None, None, None, []
 
 def ai_news_sentiment(news_list):
     if not news_list:
@@ -488,7 +489,7 @@ st.sidebar.title("📡 導覽選單")
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
 tw_c, tw_m20, tw_status = get_market_breadth()
-if tw_c:
+if tw_c is not None:
     st.sidebar.metric("加權指數", f"{tw_c:,.0f}")
     if "綠" in tw_status or "多" in tw_status: st.sidebar.success(tw_status)
     else: st.sidebar.error(tw_status)
@@ -684,7 +685,7 @@ if main_page == "🎯 股神六星雷達系統":
                 c1.metric("近四季 EPS (元)", eps)
                 c2.metric("本益比 (P/E)", pe)
                 c3.metric("最新營收年增率 (YoY)", rev)
-                if rev != "---" and float(rev.replace('%','').strip()) > 10:
+                if rev is not None and float(rev.replace('%','').strip()) > 10:
                     st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
                 st.divider()
                 st.markdown("#### 🧠 AI 消息面情感解析")
@@ -724,7 +725,8 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 if row['動向狀態'] == "🟢 主力連買":
                     vwap_dict[row['代號']] = estimate_vwap(row['代號'], row['連續天數'])
                 else:
-                    vwap_dict[row['代號']] = "---"
+                    # 🔥 修復：將 "---" 改為 None
+                    vwap_dict[row['代號']] = None
             
             analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))
             analyzed_df.insert(3, '主力推估成本', analyzed_df['代號'].map(vwap_dict))

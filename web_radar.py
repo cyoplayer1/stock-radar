@@ -14,6 +14,7 @@ from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeo
 import os
 import numpy as np
 import xml.etree.ElementTree as ET
+import traceback
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
@@ -24,18 +25,24 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 HEADERS = {"User-Agent": UA}
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 
-# === 2. 🛡️ 安全連線防護機制 ===
+# === 2. 🛡️ 安全連線防護機制 (強化版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False)
             response.raise_for_status() 
             return response.json()
-        except (ChunkedEncodingError, ConnectionError, ReadTimeout):
+        except requests.exceptions.HTTPError as e:
+            print(f"[HTTP 錯誤] {url} -> {e}")
+            if response.status_code in [403, 429]: # 若被阻擋，多等一下
+                time.sleep(3)
+            else:
+                time.sleep(1)
+        except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
+            print(f"[連線錯誤] {url} -> {e}")
             time.sleep(2)
-        except ValueError:
-            break
-        except Exception:
+        except Exception as e:
+            print(f"[未知錯誤] {url} -> {e}")
             break
     return {}
 
@@ -50,8 +57,9 @@ def get_market_breadth():
             m20 = df['MA20'].iloc[-1]
             status = "🟢 偏多順風 (站上月線，適合積極操作)" if c > m20 else "🔴 偏空逆風 (跌破月線，建議縮小部位)"
             return round(c, 2), round(m20, 2), status
-    except: pass
-    return None, None, "⚪ 未知"
+    except Exception as e: 
+        print(f"取得大盤資料失敗: {e}")
+    return None, None, "⚪ 未知 (資料獲取失敗)"
 
 def calculate_kd(df):
     if len(df) < 9: return df
@@ -84,7 +92,10 @@ def get_fugle_realtime(symbol):
         if res.status_code == 200:
             data = res.json()
             return data.get('closePrice'), data.get('total', {}).get('tradeVolume', 0)
-    except: pass
+        elif res.status_code in [401, 403, 429]:
+            print(f"Fugle API 異常 ({res.status_code})，可能額度用盡或金鑰失效")
+    except Exception as e: 
+        print(f"Fugle 即時報價讀取失敗: {e}")
     return None, None
 
 def fetch_fast_price(symbol):
@@ -95,7 +106,8 @@ def fetch_fast_price(symbol):
         if not df.empty: return round(df['Close'].iloc[-1], 2)
         df = yf.Ticker(f"{symbol}.TWO").history(period="1d")
         if not df.empty: return round(df['Close'].iloc[-1], 2)
-    except: pass
+    except Exception as e: 
+        print(f"快速抓價失敗 {symbol}: {e}")
     return "---"
 
 def estimate_vwap(symbol, days):
@@ -124,7 +136,6 @@ def get_fundamentals_and_news(symbol):
         rev_growth = info.get('revenueGrowth', None)
         rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else "---"
         
-        # 🚀 強力新聞引擎：加入連結擷取
         news = []
         try:
             name = STOCKS_DICT.get(f"{symbol}.TW", STOCKS_DICT.get(f"{symbol}.TWO", "")).replace(" ", "")
@@ -134,14 +145,15 @@ def get_fundamentals_and_news(symbol):
             root = ET.fromstring(res.content)
             for item in root.findall('.//item')[:5]:
                 title = item.find('title').text
-                link = item.find('link').text if item.find('link') is not None else "#" # 擷取新聞超連結
+                link = item.find('link').text if item.find('link') is not None else "#"
                 clean_title = title.rsplit(' - ', 1)[0]
                 news.append({'title': clean_title, 'link': link})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"新聞抓取失敗 {symbol}: {e}")
             
         return eps, pe, rev_growth_str, news
-    except:
+    except Exception as e:
+        print(f"基本面抓取失敗 {symbol}: {e}")
         return "---", "---", "---", []
 
 def ai_news_sentiment(news_list):
@@ -156,7 +168,7 @@ def ai_news_sentiment(news_list):
     for n in news_list:
         t = n.get('title', '')
         l = n.get('link', '#')
-        formatted_news.append(f"- [{t}]({l})") # 轉換成 Markdown 超連結
+        formatted_news.append(f"- [{t}]({l})")
         for w in pos_words:
             if w in t: score += 1
         for w in neg_words:
@@ -185,7 +197,13 @@ def get_inst_data():
         r2 = safe_get_json(u2, HEADERS)
         if 'aaData' in r2:
             for d in r2['aaData']: inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
-    except: pass
+    except Exception as e:
+        print(f"籌碼資料獲取失敗: {e}")
+    
+    # 💡 防止雲端空資料被快取
+    if not inst_map:
+        st.cache_data.clear()
+        
     return inst_map
 
 @st.cache_data(ttl=300)
@@ -210,7 +228,12 @@ def get_hot_rank_ids():
             cv = 9 if df_otc.shape[1] >= 10 else df_otc.shape[1] - 2
             df_otc['val'] = pd.to_numeric(df_otc[cv].astype(str).str.replace(',',''), errors='coerce')
             hot_ids.update(df_otc.sort_values('val', ascending=False).head(15)[0].tolist())
-    except: pass
+    except Exception as e:
+        print(f"熱門排行獲取失敗: {e}")
+        
+    if not hot_ids:
+        st.cache_data.clear()
+        
     return hot_ids
 
 # === 4. 名單字典 (完整 112 檔) ===
@@ -254,10 +277,12 @@ SECTOR_MAP = {
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
-        tid = clean + ".TW"; df = yf.Ticker(tid).history(period="1y")
+        tid = clean + ".TW"
+        df = yf.Ticker(tid).history(period="1y")
         df.dropna(subset=['Close'], inplace=True)
         if df.empty:
-            tid = clean + ".TWO"; df = yf.Ticker(tid).history(period="1y")
+            tid = clean + ".TWO"
+            df = yf.Ticker(tid).history(period="1y")
             df.dropna(subset=['Close'], inplace=True)
         if df.empty or len(df) < 65: return None
         
@@ -286,10 +311,9 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
-        # === 👑 隱藏版進階邏輯：強勢底底高架構 ===
         is_higher_low = df['Low'].iloc[-1] >= df['Low'].iloc[-2]
         is_higher_high = df['High'].iloc[-1] > df['High'].iloc[-2]
-        is_above_ma20 = c > df['MA20'].iloc[-1] # 需有月線保護
+        is_above_ma20 = c > df['MA20'].iloc[-1]
         if is_higher_low and is_higher_high and is_above_ma20:
             s+=1
             tags.append("👑[強勢底底高架構]")
@@ -306,19 +330,19 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if is_warning: risk_level = "🚨 高風險 (處置前兆)"
         elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
         
-        # 🔗 建立外連技術線圖網址
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean}/technical-analysis"
         
-        # 星等上限調整：如果有隱藏架構加持，星星數可能超過6顆，我們把它統一轉換成視覺星號
         star_display = "⭐"*s if s>0 else "休息"
-        if s >= 7: star_display = "🌟"*7 # 若全數符合(含隱藏邏輯)，給予特殊大星
+        if s >= 7: star_display = "🌟"*7
         
         return {
             '標的': f"{clean} {name}", '看盤連結': chart_url, '星等': star_display, '收盤': round(c,2), 
             '籌碼大戶(張)': inst_display, '今日量(張)': int(v/1000), '觸發條件': " ".join(tags), 
             '星星數': s, '處置與籌碼風險': risk_level
         }
-    except: return None
+    except Exception as e:
+        print(f"分析股票 {ticker_in} 失敗: {e}")
+        return None
 
 def diagnose_holding(ticker_in):
     try:
@@ -469,7 +493,7 @@ if tw_c:
     if "綠" in tw_status or "多" in tw_status: st.sidebar.success(tw_status)
     else: st.sidebar.error(tw_status)
 else:
-    st.sidebar.write("大盤資料讀取中...")
+    st.sidebar.warning("大盤資料讀取中... 或連線遭拒")
 st.sidebar.markdown("---")
 
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
@@ -479,6 +503,15 @@ if main_page == "🎯 股神六星雷達系統":
     def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
     u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=200)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
+
+# 🛡️ 新增：強制清除快取按鈕
+st.sidebar.markdown("---")
+st.sidebar.subheader("🛠️ 系統維護")
+if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
+    st.cache_data.clear()
+    st.sidebar.success("快取已清除！請重新掃描。")
+    time.sleep(1)
+    st.rerun()
 
 # ==========================================
 # 分頁 1: 🎯 股神六星雷達系統
@@ -490,7 +523,6 @@ if main_page == "🎯 股神六星雷達系統":
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
         
-        # --- 💡 新增：系統操盤核心心法 ---
         st.info("""
         💡 **【系統操盤核心心法】**
         1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
@@ -498,11 +530,14 @@ if main_page == "🎯 股神六星雷達系統":
         3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
         4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。
         """)
-        # ---------------------------------
         
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
+            
+            if not inst_map or not hot_list:
+                st.warning("⚠️ 警告：無法從台灣證交所取得大戶與熱門資料 (可能 IP 遭封鎖)，將進行無籌碼掃描！")
+                
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
@@ -513,35 +548,29 @@ if main_page == "🎯 股神六星雷達系統":
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
                 display_df = df[['標的', '看盤連結', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']]
                 
-                # 🎨 幫六星雷達加上專屬的標註警示色！
                 def highlight_tags(val):
                     if isinstance(val, str):
-                        # 負面/高風險標註 (紅色)
                         if '風險' in val or '警戒' in val or '隔日沖' in val or '🚨' in val or '🪤' in val: 
                             return 'color: #ff4b4b; font-weight: bold'
-                        # 安全標註 (綠色)
                         elif '安全' in val: 
                             return 'color: #00cc96'
-                        # 觸發條件與熱門標註 (黃/橘色高光)
                         elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val or '👑' in val:
                             return 'color: #ffd166; font-weight: bold'
                     return ''
                     
-                # 將顏色套用到風險與觸發條件欄位
                 styled_df = display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件'])
                 
-                # ⚙️ 讓表格中的「看盤連結」變成可以點擊的網頁圖示
                 st.dataframe(
                     styled_df, 
                     use_container_width=True,
-                    hide_index=True, # 隱藏最左邊醜醜的數字索引
+                    hide_index=True,
                     height=580,
                     column_config={
                         "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
                     }
                 )
             else:
-                st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
+                st.warning("目前沒有符合量能條件的標的，或是受到 API 流量限制 (Rate Limit) 影響，請稍後再試。")
 
     with t2:
         st.markdown("### 📈 互動圖表：型態確認")
@@ -557,6 +586,8 @@ if main_page == "🎯 股神六星雷達系統":
                 fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
                 fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.error("繪圖失敗：無法取得報價。")
 
     with t3:
         st.markdown("### 🛡️ 智能部位計算機與紀律診斷")
@@ -595,6 +626,8 @@ if main_page == "🎯 股神六星雷達系統":
                     
                     if suggested_shares > (v5_avg * 0.01):
                         st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！大資金進出將產生嚴重滑價，建議降低部位或分批建倉！")
+            else:
+                st.error("診斷失敗：無法取得足夠的歷史資料。")
 
     with t4:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
@@ -619,7 +652,7 @@ if main_page == "🎯 股神六星雷達系統":
                     column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")}
                 )
             else:
-                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
+                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的，或正在等待 API 冷卻。")
 
     with t5:
         st.markdown("### 🧪 策略回測實驗室 (2年期)")
@@ -699,10 +732,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df.insert(5, '六星技術評等', analyzed_df['代號'].map(star_dict))
             analyzed_df['產業族群'] = analyzed_df['代號'].map(SECTOR_MAP).fillna("其他/未分類")
 
-            # ==========================================
-            # 🌟 新增功能：計算 ETF 持股權重與加碼水位空間
-            # ==========================================
-            # 將收盤價轉為數值，以計算總市值預估值
             analyzed_df['最新收盤價_num'] = pd.to_numeric(analyzed_df['最新收盤價'], errors='coerce').fillna(0)
             analyzed_df['市值預估'] = analyzed_df['最新持股張數'] * analyzed_df['最新收盤價_num'] * 1000
             total_assets = analyzed_df['市值預估'].sum()
@@ -713,11 +742,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 else:
                     weight = 0.0
                 
-                # ⚖️ 判定持股上限 (台積電 2330 為 25%，其餘標的 10%)
                 limit = 25.0 if str(row['代號']) == "2330" else 10.0
                 space = limit - weight
                 
-                # 狀態判定 (小於 0.5% 視為滿水位，小於 2% 視為快滿)
                 if space <= 0.5:
                     status = f"🛑 滿水位 (剩 {max(0, space):.1f}%)"
                 elif space <= 2.0:
@@ -728,9 +755,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 return pd.Series([round(weight, 2), status])
 
             analyzed_df[['預估權重(%)', '加碼空間']] = analyzed_df.apply(calc_weight_and_space, axis=1)
-            # ==========================================
 
-        # 🗺️ 資金熱力圖 (自定義紅綠色系)
         st.subheader("🗺️ 資金熱力圖 (主力買賣板塊)")
         try:
             heat_df = analyzed_df[analyzed_df['今日買賣超(張)'] != 0].copy()
@@ -740,16 +765,15 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     path=[px.Constant("全市場動向"), '產業族群', '股票名稱'],
                     values=heat_df['今日買賣超(張)'].abs(),
                     color='今日買賣超(張)', 
-                    color_continuous_scale=['#00cc96', '#262730', '#ff4b4b'], # 綠色(賣出) -> 深色(平盤) -> 紅色(買進)
+                    color_continuous_scale=['#00cc96', '#262730', '#ff4b4b'], 
                     color_continuous_midpoint=0,
                     title="板塊面積大小代表張數，紅色代表買進，綠色代表賣出 (台股慣例)"
                 )
                 fig.update_traces(textinfo="label+value")
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.error("熱力圖生成失敗")
+            st.error(f"熱力圖生成失敗: {e}")
 
-        # 📊 戰情總覽
         st.divider()
         st.subheader("📊 盤面戰情總覽")
         buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
@@ -766,11 +790,9 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.divider()
         st.subheader("🔥 經理人持股 × 成本防護 × 雙引擎共振榜")
         
-        # 移除暫存的計算用欄位，整理顯示表格
         display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估'])
         display_df = display_df.rename(columns={'連續天數顯示': '連續天數'})
         
-        # 🎨 為表格加上重點顏色警示
         def highlight_danger(val):
             if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val or '滿水位' in val): 
                 return 'color: #ff4b4b; font-weight: bold'
@@ -780,10 +802,8 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 return 'color: #ffd166; font-weight: bold'
             return ''
             
-        # 同時將警示色套用到「處置與風險」跟「加碼空間」兩個欄位
         styled_df = display_df.style.map(highlight_danger, subset=['處置與風險', '加碼空間'])
         
-        # ⚙️ 讓表格中的「看盤連結」變成可以點擊的網頁圖示
         st.dataframe(
             styled_df,
             use_container_width=True,

@@ -282,7 +282,7 @@ def get_hot_rank_ids():
         
     return hot_ids
 
-# === 5. 名單字典 ===
+# === 5. 名單字典 (顯示為中文名稱優先) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -440,50 +440,26 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (真實資料版) ===
-def fetch_today_holdings_from_api(etf_code="00981A"):
-    today = datetime.datetime.today().strftime('%Y-%m-%d')
-    new_data = []
-    url_twse = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
-    res = safe_get_json(url_twse, HEADERS)
-    if res and 'data' in res and len(res['data']) > 0:
-        for row in res['data']:
-            ticker = str(row[0]).strip()
-            name = str(row[1]).strip()
-            shares = int(row[2].replace(',', '')) // 1000 
-            new_data.append([today, ticker, name, shares])
-    return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
-
+# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (雲端讀取版) ===
 def get_00981a_holdings_history(force_refresh=False):
     db_path = "00981A_holdings_db.csv"
-    today_str = datetime.datetime.today().strftime('%Y-%m-%d')
     
+    if force_refresh:
+        st.cache_data.clear()
+        
     if os.path.exists(db_path):
-        df_history = pd.read_csv(db_path)
-    else:
-        df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
-        
-    if not df_history.empty and today_str in df_history['日期'].values and not force_refresh:
-        return df_history
-        
-    if force_refresh and not df_history.empty:
-        df_history = df_history[df_history['日期'] != today_str]
+        try:
+            df_history = pd.read_csv(db_path)
+            if not df_history.empty:
+                return df_history
+        except Exception as e:
+            st.error(f"讀取資料庫失敗: {e}")
+            return pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
             
-    with st.spinner("🔄 正在從台灣證交所獲取 00981A 今日最新真實持股..."):
-        df_today = fetch_today_holdings_from_api("00981A")
-        
-    if not df_today.empty:
-        df_history = pd.concat([df_history, df_today], ignore_index=True)
-        # 去除同一天的重複資料
-        df_history = df_history.drop_duplicates(subset=['日期', '代號'], keep='last')
-        df_history.to_csv(db_path, index=False)
-        st.toast("✅ 今日真實持股資料已更新入庫！", icon="🎉")
-    else:
-        # 🔥 若抓不到真實資料，直接顯示紅色警告，絕不使用假資料
-        st.error("🚨 警告：無法從證交所取得今日真實資料！(您的雲端 IP 已被封鎖)")
-        st.info("💡 解法：請將此程式碼下載至您的個人電腦上執行，使用家用網路 IP 即可順利獲取真實籌碼。")
-        
-    return df_history
+    # 🔥 若找不到檔案，直接顯示紅色警告提示上傳
+    st.error("🚨 找不到真實資料庫 `00981A_holdings_db.csv`！")
+    st.info("💡 請記得每天盤後在您的電腦執行 `fetch_data.py` 抓取真實籌碼，並將生成的 CSV 檔案上傳覆蓋到 GitHub。")
+    return pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
 
 def analyze_manager_moves(df):
     if df.empty: return pd.DataFrame()
@@ -543,7 +519,7 @@ if main_page == "🎯 股神六星雷達系統":
 # 🛡️ 系統維護區 & 瀏覽次數顯示
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ 系統維護")
-if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
+if st.sidebar.button("🧹 清除系統快取 (強制重讀資料)", use_container_width=True):
     st.cache_data.clear()
     st.sidebar.success("快取已清除！請重新掃描。")
     time.sleep(1)
@@ -733,12 +709,13 @@ if main_page == "🎯 股神六星雷達系統":
                 st.info(ai_report)
 
 # ==========================================
-# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達 (純讀取地端上傳資料版)
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")
-    force_refresh = st.button("🔄 強制重新抓取今日籌碼")
+    force_refresh = st.button("🔄 重新讀取資料庫")
     
+    # 🔥 這裡只做讀取，完全不對證交所發送任何連線請求
     raw_df = get_00981a_holdings_history(force_refresh=force_refresh)
     analyzed_df = analyze_manager_moves(raw_df)
     

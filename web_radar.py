@@ -25,7 +25,32 @@ HEADERS = {"User-Agent": UA}
 # 🔑 替換為你的全新富果 API 金鑰
 FUGLE_API_KEY = "YzkzZmUzNjItN2VlYy00MWZhLTllMGYtMjgxODk3YjhiNGVmIDJkOGEyOGUwLWUyNTItNDBjNi04OTRjLTljMmRiOTgyMTZjMA=="
 
-# === 2. 🛡️ 安全連線防護機制 (強化版) ===
+# === 2. 👁️ 瀏覽次數統計機制 ===
+def get_and_increment_view_count():
+    count_file = "page_views.txt"
+    # 讀取現有的瀏覽次數
+    if os.path.exists(count_file):
+        try:
+            with open(count_file, "r") as f:
+                count = int(f.read().strip())
+        except:
+            count = 0
+    else:
+        count = 0
+        
+    # 如果這個 Session (使用者連線) 是第一次進來，才把次數 +1
+    if 'has_viewed' not in st.session_state:
+        count += 1
+        try:
+            with open(count_file, "w") as f:
+                f.write(str(count))
+            st.session_state['has_viewed'] = True
+        except Exception as e:
+            print(f"無法寫入瀏覽次數: {e}")
+            
+    return count
+
+# === 3. 🛡️ 安全連線防護機制 (強化版) ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -34,7 +59,7 @@ def safe_get_json(url, headers, max_retries=3):
             return response.json()
         except requests.exceptions.HTTPError as e:
             print(f"[HTTP 錯誤] {url} -> {e}")
-            if response.status_code in [403, 429]: # 若被阻擋，多等一下
+            if response.status_code in [403, 429]: 
                 time.sleep(3)
             else:
                 time.sleep(1)
@@ -46,21 +71,47 @@ def safe_get_json(url, headers, max_retries=3):
             break
     return {}
 
-# === 3. 核心指標與大盤風向球 ===
-# ⚡ 快取時間從 1800 秒縮短為 60 秒，讓大盤保持即時
+# === 4. 核心指標與大盤風向球 (終極即時版) ===
 @st.cache_data(ttl=60)
 def get_market_breadth():
     try:
+        # 1. 取得歷史資料計算月線防守點 (MA20)
         df = yf.Ticker("^TWII").history(period="3mo")
-        if not df.empty:
-            df['MA20'] = df['Close'].rolling(20).mean()
-            c = df['Close'].iloc[-1]
-            m20 = df['MA20'].iloc[-1]
-            status = "🟢 偏多順風 (站上月線，適合積極操作)" if c > m20 else "🔴 偏空逆風 (跌破月線，建議縮小部位)"
-            return round(c, 2), round(m20, 2), status
+        if df.empty:
+            return None, None, "⚪ 未知 (資料獲取失敗)"
+
+        df['MA20'] = df['Close'].rolling(20).mean()
+        m20 = df['MA20'].iloc[-1]
+        c = df['Close'].iloc[-1] 
+        
+        # 2. 強制獲取【真・即時報價】(優先打 TWSE 官方 API)
+        try:
+            twse_url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
+            res = requests.get(twse_url, headers=HEADERS, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                z_price = data.get('msgArray', [{}])[0].get('z', '')
+                if z_price and z_price != '-':
+                    c = float(z_price)
+        except Exception:
+            pass
+            
+        # 3. 如果證交所被擋，改打 Yahoo 原始底層 API (繞過 yfinance 套件的快取 Bug)
+        try:
+            yh_url = "https://query1.finance.yahoo.com/v8/finance/chart/^TWII?interval=1m&range=1d"
+            res = requests.get(yh_url, headers=HEADERS, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                c = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+        except Exception:
+            pass
+        
+        status = "🟢 偏多順風 (站上月線，適合積極操作)" if c > m20 else "🔴 偏空逆風 (跌破月線，建議縮小部位)"
+        return round(c, 2), round(m20, 2), status
+        
     except Exception as e: 
         print(f"取得大盤資料失敗: {e}")
-    return None, None, "⚪ 未知 (資料獲取失敗)"
+        return None, None, "⚪ 未知 (資料獲取失敗)"
 
 def calculate_kd(df):
     if len(df) < 9: return df
@@ -236,7 +287,7 @@ def get_hot_rank_ids():
         
     return hot_ids
 
-# === 4. 名單字典 (完整 112 檔) ===
+# === 5. 名單字典 ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -273,7 +324,7 @@ SECTOR_MAP = {
     "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
 }
 
-# === 5. 雷達掃描與診斷邏輯 ===
+# === 6. 雷達掃描與診斷邏輯 ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -394,7 +445,7 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 6. 🕵️‍♂️ 經理人籌碼追蹤邏輯 ===
+# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
@@ -482,7 +533,7 @@ def analyze_manager_moves(df):
         })
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# === 7. 側邊欄與大盤風向球 ===
+# === 8. 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 導覽選單")
 
 st.sidebar.markdown("---")
@@ -504,7 +555,7 @@ if main_page == "🎯 股神六星雷達系統":
     u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=200)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
-# 🛡️ 系統維護區
+# 🛡️ 系統維護區 & 瀏覽次數顯示
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ 系統維護")
 if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
@@ -512,6 +563,10 @@ if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_wid
     st.sidebar.success("快取已清除！請重新掃描。")
     time.sleep(1)
     st.rerun()
+
+# 顯示累積瀏覽次數
+view_count = get_and_increment_view_count()
+st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 
 # ==========================================
 # 分頁 1: 🎯 股神六星雷達系統
@@ -542,7 +597,6 @@ if main_page == "🎯 股神六星雷達系統":
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    # 🔥 修復：降頻更新進度條，防止瀏覽器前端 (removeChild) 崩潰
                     if i % 5 == 0 or i == len(s_list) - 1:
                         pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
@@ -641,7 +695,6 @@ if main_page == "🎯 股神六星雷達系統":
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    # 🔥 修復：降頻更新進度條，防止瀏覽器前端崩潰
                     if i % 5 == 0 or i == len(s_list) - 1:
                         pb.progress((i+1)/len(s_list))
                     res = f.result()

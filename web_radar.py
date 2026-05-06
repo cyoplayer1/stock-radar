@@ -22,13 +22,12 @@ st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", l
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
-# 🔑 替換為你的全新富果 API 金鑰
+# 🔑 全新富果 API 金鑰
 FUGLE_API_KEY = "YzkzZmUzNjItN2VlYy00MWZhLTllMGYtMjgxODk3YjhiNGVmIDJkOGEyOGUwLWUyNTItNDBjNi04OTRjLTljMmRiOTgyMTZjMA=="
 
 # === 2. 👁️ 瀏覽次數統計機制 ===
 def get_and_increment_view_count():
     count_file = "page_views.txt"
-    # 讀取現有的瀏覽次數
     if os.path.exists(count_file):
         try:
             with open(count_file, "r") as f:
@@ -38,7 +37,6 @@ def get_and_increment_view_count():
     else:
         count = 0
         
-    # 如果這個 Session (使用者連線) 是第一次進來，才把次數 +1
     if 'has_viewed' not in st.session_state:
         count += 1
         try:
@@ -75,7 +73,6 @@ def safe_get_json(url, headers, max_retries=3):
 @st.cache_data(ttl=60)
 def get_market_breadth():
     try:
-        # 1. 取得歷史資料計算月線防守點 (MA20)
         df = yf.Ticker("^TWII").history(period="3mo")
         if df.empty:
             return None, None, "⚪ 未知 (資料獲取失敗)"
@@ -84,7 +81,6 @@ def get_market_breadth():
         m20 = df['MA20'].iloc[-1]
         c = df['Close'].iloc[-1] 
         
-        # 2. 強制獲取【真・即時報價】(優先打 TWSE 官方 API)
         try:
             twse_url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
             res = requests.get(twse_url, headers=HEADERS, timeout=3)
@@ -96,7 +92,6 @@ def get_market_breadth():
         except Exception:
             pass
             
-        # 3. 如果證交所被擋，改打 Yahoo 原始底層 API (繞過 yfinance 套件的快取 Bug)
         try:
             yh_url = "https://query1.finance.yahoo.com/v8/finance/chart/^TWII?interval=1m&range=1d"
             res = requests.get(yh_url, headers=HEADERS, timeout=3)
@@ -445,7 +440,7 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 ===
+# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (真實資料版) ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
@@ -474,30 +469,20 @@ def get_00981a_holdings_history(force_refresh=False):
     if force_refresh and not df_history.empty:
         df_history = df_history[df_history['日期'] != today_str]
             
-    with st.spinner("🔄 正在從連線獲取經理人今日最新持股..."):
+    with st.spinner("🔄 正在從台灣證交所獲取 00981A 今日最新真實持股..."):
         df_today = fetch_today_holdings_from_api("00981A")
         
     if not df_today.empty:
         df_history = pd.concat([df_history, df_today], ignore_index=True)
+        # 去除同一天的重複資料
+        df_history = df_history.drop_duplicates(subset=['日期', '代號'], keep='last')
         df_history.to_csv(db_path, index=False)
-        st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
-    elif df_history.empty:
-        st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
-        dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
-        mock_scenarios = [
-            ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
-            ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
-            ("3017", "奇鋐", [800, 800, 1200, 1800]), ("2345", "智邦", [1000, 1200, 1500, 1900]),
-            ("3533", "嘉澤", [600, 600, 700, 900]), ("2330", "台積電", [8000, 8000, 8000, 8000]),
-            ("2454", "聯發科", [1500, 1500, 1500, 1500]), ("3324", "雙鴻", [500, 500, 500, 500]),
-            ("2308", "台達電", [5000, 5200, 5500, 4500]), ("2382", "廣達", [4000, 4000, 3000, 2000]),
-            ("3034", "聯詠", [1000, 1000, 800, 500]), ("2603", "長榮", [5000, 4000, 3000, 2000]),
-            ("3661", "世芯-KY", [400, 400, 400, 200])
-        ]
-        dummy_rows = []
-        for ticker, name, shares in mock_scenarios:
-            for i, d in enumerate(dates): dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
-        return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
+        st.toast("✅ 今日真實持股資料已更新入庫！", icon="🎉")
+    else:
+        # 🔥 若抓不到真實資料，直接顯示紅色警告，絕不使用假資料
+        st.error("🚨 警告：無法從證交所取得今日真實資料！(您的雲端 IP 已被封鎖)")
+        st.info("💡 解法：請將此程式碼下載至您的個人電腦上執行，使用家用網路 IP 即可順利獲取真實籌碼。")
+        
     return df_history
 
 def analyze_manager_moves(df):
@@ -873,5 +858,3 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
             }
         )
-    else:
-        st.warning("目前尚未收集到足夠的歷史資料，或今日 API 獲取失敗，請稍後再試。")

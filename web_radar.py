@@ -21,7 +21,9 @@ st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", l
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
-FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
+
+# 🔑 替換為你的全新富果 API 金鑰
+FUGLE_API_KEY = "YzkzZmUzNjItN2VlYy00MWZhLTllMGYtMjgxODk3YjhiNGVmIDJkOGEyOGUwLWUyNTItNDBjNi04OTRjLTljMmRiOTgyMTZjMA=="
 
 # === 2. 🛡️ 安全連線防護機制 (強化版) ===
 def safe_get_json(url, headers, max_retries=3):
@@ -45,7 +47,8 @@ def safe_get_json(url, headers, max_retries=3):
     return {}
 
 # === 3. 核心指標與大盤風向球 ===
-@st.cache_data(ttl=1800)
+# ⚡ 快取時間從 1800 秒縮短為 60 秒，讓大盤保持即時
+@st.cache_data(ttl=60)
 def get_market_breadth():
     try:
         df = yf.Ticker("^TWII").history(period="3mo")
@@ -106,11 +109,9 @@ def fetch_fast_price(symbol):
         if not df.empty: return round(df['Close'].iloc[-1], 2)
     except Exception as e: 
         print(f"快速抓價失敗 {symbol}: {e}")
-    # 🔥 修復：將 "---" 改為 None
     return None
 
 def estimate_vwap(symbol, days):
-    # 🔥 修復：將 "---" 改為 None
     if days <= 0 or not isinstance(days, int): return None
     try:
         df = yf.Ticker(f"{symbol}.TW").history(period="1mo")
@@ -131,7 +132,6 @@ def get_fundamentals_and_news(symbol):
             tkr = yf.Ticker(f"{symbol}.TWO")
             info = tkr.info
         
-        # 🔥 修復：將 "---" 改為 None
         eps = info.get('trailingEps', None)
         pe = info.get('trailingPE', None)
         rev_growth = info.get('revenueGrowth', None)
@@ -201,7 +201,6 @@ def get_inst_data():
     except Exception as e:
         print(f"籌碼資料獲取失敗: {e}")
     
-    # 💡 防止雲端空資料被快取
     if not inst_map:
         st.cache_data.clear()
         
@@ -505,7 +504,7 @@ if main_page == "🎯 股神六星雷達系統":
     u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=200)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
-# 🛡️ 新增：強制清除快取按鈕
+# 🛡️ 系統維護區
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ 系統維護")
 if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
@@ -543,7 +542,9 @@ if main_page == "🎯 股神六星雷達系統":
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    pb.progress((i+1)/len(s_list))
+                    # 🔥 修復：降頻更新進度條，防止瀏覽器前端 (removeChild) 崩潰
+                    if i % 5 == 0 or i == len(s_list) - 1:
+                        pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
@@ -640,7 +641,9 @@ if main_page == "🎯 股神六星雷達系統":
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    pb.progress((i+1)/len(s_list))
+                    # 🔥 修復：降頻更新進度條，防止瀏覽器前端崩潰
+                    if i % 5 == 0 or i == len(s_list) - 1:
+                        pb.progress((i+1)/len(s_list))
                     res = f.result()
                     if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']):
                         danger_list.append(res)
@@ -725,7 +728,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                 if row['動向狀態'] == "🟢 主力連買":
                     vwap_dict[row['代號']] = estimate_vwap(row['代號'], row['連續天數'])
                 else:
-                    # 🔥 修復：將 "---" 改為 None
                     vwap_dict[row['代號']] = None
             
             analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))

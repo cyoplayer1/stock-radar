@@ -20,7 +20,7 @@ import io
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="綜專屬：究極軍規雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="老盧專屬：究極軍規雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -85,33 +85,35 @@ def get_market_breadth():
     except Exception as e:
         return None, None, "❌ 連線遭拒 (Yahoo API 阻擋)"
 
-# === 🌟 模組 A1：美股大腦 ===
+# === 🌟 模組 A1：美股大腦 (垂直排版修復版) ===
 def us_market_brain():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌐 美股連動觀測")
     us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)"}
     
-    cols = st.sidebar.columns(3)
-    for idx, (ticker, name) in enumerate(us_tickers.items()):
+    for ticker, name in us_tickers.items():
         try:
             tk = yf.Ticker(ticker)
-            df = tk.history(period="5d")
+            df = tk.history(period="1mo")
             if not df.empty and len(df) >= 2:
                 close_today = df['Close'].iloc[-1]
                 close_yest = df['Close'].iloc[-2]
                 change = ((close_today - close_yest) / close_yest) * 100
                 delta_color = "normal" if change > 0 else "inverse"
                 
-                cols[idx].metric(
-                    label=f"{name.split()[0]}", 
+                # 垂直排列，解決破版問題
+                st.sidebar.metric(
+                    label=f"{name} ({ticker})", 
                     value=f"${close_today:.2f}", 
                     delta=f"{change:.2f}%", 
                     delta_color=delta_color
                 )
             else:
-                 cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
+                 st.sidebar.metric(label=name, value="N/A", delta="-")
         except Exception:
-            cols[idx].metric(label=name.split()[0], value="Error", delta="-")
+            st.sidebar.metric(label=name, value="Error", delta="-")
+            
+    st.sidebar.caption("💡 提示：若 ARM/TSM 同步大漲，留意聯詠連動跳空。")
 
 # === 🌟 模組 A2：ADR 溢價神算 ===
 def adr_premium_calculator():
@@ -142,10 +144,10 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.subheader("🎙️ AI 語音早報")
     
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
-        with st.spinner("綜專屬 AI 正在整理戰報並錄音中..."):
+        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
-            status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
-            report_text = f"綜早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您修車與操作一切順利！"
+            status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線，請留意風險"
+            report_text = f"老盧早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您修車與操作一切順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -163,7 +165,7 @@ def line_notify_setting():
     if st.sidebar.button("傳送測試訊息"):
         if line_token:
             headers = {"Authorization": "Bearer " + line_token}
-            data = {'message':'🔧 綜，股神雷達 Line 連線測試成功！'}
+            data = {'message':'🔧 老盧，股神雷達 Line 連線測試成功！'}
             res = requests.post("https://notify-api.line.me/api/notify", headers=headers, data=data)
             if res.status_code == 200: 
                 st.sidebar.success("✅ 測試發送成功！")
@@ -685,7 +687,7 @@ def analyze_manager_moves(df):
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
 # === 側邊欄與大盤風向球 ===
-st.sidebar.title("📡 綜軍規操盤台")
+st.sidebar.title("📡 老盧軍規操盤台")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
@@ -732,7 +734,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 綜的股神系統：究極大滿配軍規版")
+    st.title("📡 稀有的股神系統：究極大滿配軍規版")
     t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
@@ -838,7 +840,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
-        st.markdown("### 🏰 綜專屬：持股波段護城河監控")
+        st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
         st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
         
         c_moat1, c_moat2 = st.columns(2)

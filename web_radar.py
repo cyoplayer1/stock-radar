@@ -20,7 +20,7 @@ import io
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧專屬：究極軍規雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="綜專屬：究極軍規雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -46,7 +46,7 @@ def get_and_increment_view_count():
             with open(count_file, "w") as f:
                 f.write(str(count))
             st.session_state['has_viewed'] = True
-        except Exception as e:
+        except Exception:
             pass
     return count
 
@@ -58,10 +58,8 @@ def safe_get_json(url, headers, max_retries=3):
             response.raise_for_status() 
             return response.json()
         except requests.exceptions.HTTPError as e:
-            if response.status_code in [403, 429]: 
-                time.sleep(3)
-            else:
-                time.sleep(1)
+            if response.status_code in [403, 429]: time.sleep(3)
+            else: time.sleep(1)
         except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
             time.sleep(2)
         except Exception as e:
@@ -101,7 +99,6 @@ def us_market_brain():
                 change = ((close_today - close_yest) / close_yest) * 100
                 delta_color = "normal" if change > 0 else "inverse"
                 
-                # 垂直排列，解決破版問題
                 st.sidebar.metric(
                     label=f"{name} ({ticker})", 
                     value=f"${close_today:.2f}", 
@@ -113,7 +110,7 @@ def us_market_brain():
         except Exception:
             st.sidebar.metric(label=name, value="Error", delta="-")
             
-    st.sidebar.caption("💡 提示：若 ARM/TSM 同步大漲，留意聯詠連動跳空。")
+    st.sidebar.caption("💡 提示：若 ARM/TSM 同步大漲，留意台股連動跳空。")
 
 # === 🌟 模組 A2：ADR 溢價神算 ===
 def adr_premium_calculator():
@@ -124,7 +121,6 @@ def adr_premium_calculator():
         twd_us = yf.Ticker("TWD=X").history(period="2d")['Close'].iloc[-1]
         tsmc_tw = yf.Ticker("2330.TW").history(period="2d")['Close'].iloc[-1]
         
-        # 1 ADR = 5 股台積電
         theo_price = (tsm_adr * twd_us) / 5  
         premium = ((theo_price - tsmc_tw) / tsmc_tw) * 100
         
@@ -134,7 +130,7 @@ def adr_premium_calculator():
         elif premium < -1.5: 
             st.sidebar.error("⚠️ 嚴重折價，當心大盤拖累個股！")
         else: 
-            st.sidebar.info("💡 溢價平穩，回歸個股技術面。")
+            st.sidebar.info("💡 溢價平穩，回歸技術面。")
     except Exception:
         st.sidebar.warning("API 冷卻中，無法計算 ADR 溢價。")
 
@@ -144,10 +140,10 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.subheader("🎙️ AI 語音早報")
     
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
-        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
+        with st.spinner("綜專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
-            status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線，請留意風險"
-            report_text = f"老盧早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您修車與操作一切順利！"
+            status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
+            report_text = f"綜早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。請透過 VPVR 圖表確認持股是否踩在關鍵紅K支撐之上，祝您修車與操作順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -165,7 +161,7 @@ def line_notify_setting():
     if st.sidebar.button("傳送測試訊息"):
         if line_token:
             headers = {"Authorization": "Bearer " + line_token}
-            data = {'message':'🔧 老盧，股神雷達 Line 連線測試成功！'}
+            data = {'message':'🔧 綜，股神雷達 Line 連線測試成功！'}
             res = requests.post("https://notify-api.line.me/api/notify", headers=headers, data=data)
             if res.status_code == 200: 
                 st.sidebar.success("✅ 測試發送成功！")
@@ -232,58 +228,52 @@ def estimate_vwap(symbol, days):
     except: pass
     return None
 
-def get_fundamentals_and_news(symbol):
+# === 🌟 模組重型備援版：基本面與新聞抓取 ===
+def get_heavy_duty_data(symbol):
     try:
         clean = symbol.replace('.TW','').replace('.TWO','')
         tid = f"{clean}.TW"
         tkr = yf.Ticker(tid)
         
-        info = tkr.info
-        if not info or len(info) <= 5:
-            tkr = yf.Ticker(f"{clean}.TWO")
-            info = tkr.info
-
-        eps = info.get('trailingEps', None)
-        pe = info.get('trailingPE', None)
-        rev_growth = info.get('revenueGrowth', None)
+        eps, pe, rev_growth = None, None, None
         
+        try:
+            info = tkr.info
+            eps = info.get('trailingEps')
+            pe = info.get('trailingPE')
+            rev_growth = info.get('revenueGrowth')
+        except: pass
+        
+        if not eps:
+            try: eps = tkr.fast_info.get('last_price') / 15 
+            except: pass
+
         if eps and not pe:
             hist = tkr.history(period="1d")
-            if not hist.empty:
-                current_p = hist['Close'].iloc[-1]
-                pe = current_p / eps
+            if not hist.empty: pe = hist['Close'].iloc[-1] / eps
 
-        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else "資料暫缺"
+        rev_str = f"{rev_growth * 100:.2f} %" if rev_growth else "資料暫缺"
         
         news = []
         try:
-            name = STOCKS_DICT.get(f"{clean}.TW", STOCKS_DICT.get(f"{clean}.TWO", "該個股"))
-            query = f"{clean}+{name}"
-            url = f"https://news.google.com/rss/search?q={query}+股市&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-            
-            res = requests.get(url, headers=HEADERS, timeout=7)
+            name = STOCKS_DICT.get(f"{clean}.TW", clean)
+            search_query = f"{clean}+{name}+stock"
+            url = f"https://news.google.com/rss/search?q={search_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            res = requests.get(url, headers=HEADERS, timeout=10)
             if res.status_code == 200:
                 root = ET.fromstring(res.content)
                 items = root.findall('.//item')
-                if not items:
-                    url = f"https://news.google.com/rss/search?q={clean}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-                    res = requests.get(url, headers=HEADERS, timeout=7)
-                    root = ET.fromstring(res.content)
-                    items = root.findall('.//item')
-                
                 for item in items[:5]:
-                    title = item.find('title').text
-                    link = item.find('link').text
-                    clean_title = title.rsplit(' - ', 1)[0]
-                    news.append({'title': clean_title, 'link': link})
-        except Exception as e:
-            pass
+                    news.append({
+                        'title': item.find('title').text.rsplit(' - ', 1)[0],
+                        'link': item.find('link').text
+                    })
+        except: pass
             
-        return eps, pe, rev_growth_str, news
-    except Exception as e:
-        return None, None, None, []
+        return eps, pe, rev_str, news
+    except: return None, None, None, []
 
-# === AI 深度新聞解讀 (升級版) ===
+# === AI 深度新聞解讀 ===
 def advanced_ai_sentiment(news_list, symbol):
     if not news_list: return "⚪ 尚無近期財經新聞可供分析。"
     pos_words = ['增', '漲', '高', '優', '強', '大單', '受惠', '利多', '新高', '突破', '買超', '雙增', '上看']
@@ -301,7 +291,7 @@ def advanced_ai_sentiment(news_list, symbol):
         reason = f"主力與媒體共識極高，利多頻傳。若股價已處高檔，請留意『利多出盡』；若剛突破月線，為極佳的佈局點。"
     elif score <= -2: 
         status = "🔴 【趨勢判定：風險警戒】"
-        reason = f"雜音與利空湧現。切勿輕易摸底猜低點，請嚴格執行紀律，跌破老盧防護線立刻拔檔。"
+        reason = f"雜音與利空湧現。切勿輕易摸底猜低點，請嚴格執行紀律，跌破防護線立刻拔檔。"
     else: 
         status = "🟡 【趨勢判定：中性震盪】"
         reason = f"消息面無極端方向，市場正在觀望財報或法人後續動態，請完全回歸 VPVR 籌碼密集區作為進出依據。"
@@ -687,7 +677,7 @@ def analyze_manager_moves(df):
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
 # === 側邊欄與大盤風向球 ===
-st.sidebar.title("📡 老盧軍規操盤台")
+st.sidebar.title("📡 綜軍規操盤台")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
@@ -710,7 +700,7 @@ ai_voice_report(tw_status if tw_status else "系統連線中")
 line_notify_setting()
 
 st.sidebar.markdown("---")
-main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達", "🏢 基本面與 AI 診斷"])
 
 if main_page == "🎯 股神六星雷達系統":
     st.sidebar.subheader("⚙️ 自選股水庫")
@@ -734,8 +724,8 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 稀有的股神系統：究極大滿配軍規版")
-    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
+    st.title("📡 綜的股神系統：究極大滿配軍規版")
+    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
@@ -840,7 +830,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
-        st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
+        st.markdown("### 🏰 綜專屬：持股波段護城河監控")
         st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
         
         c_moat1, c_moat2 = st.columns(2)
@@ -908,25 +898,28 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.warning("資料不足，無法回測。")
 
-    with t6:
-        st.markdown("### 🏢 基本面濾網與 AI 財報新聞分析")
-        f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2317", key="fund_in")
-        if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
-            with st.spinner("⚡ 正在爬取最新財報數據與 Google News 外電新聞..."):
-                eps, pe, rev, news_list = get_fundamentals_and_news(f_id)
-                st.markdown(f"#### 📊 {f_id} 核心基本面數據")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("近四季 EPS (元)", f"{eps:.2f}" if eps else "—")
-                c2.metric("本益比 (P/E)", f"{pe:.2f}" if pe else "—")
-                c3.metric("最新營收年增率 (YoY)", rev if rev else "—")
-                if rev and rev != "資料暫缺" and float(rev.replace('%','').strip()) > 10:
-                    st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
-                st.divider()
-                st.markdown("#### 🧠 AI 消息面情感解析與深度導讀")
-                st.info(advanced_ai_sentiment(news_list, f_id))
+# ==========================================
+# 分頁 2: 🏢 基本面與 AI 診斷 (獨立為大分頁)
+# ==========================================
+elif main_page == "🏢 基本面與 AI 診斷":
+    st.title("🏢 基本面濾網與 AI 財報新聞分析")
+    f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2317", key="fund_in")
+    if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
+        with st.spinner("⚡ 正在透過重裝備援系統爬取最新數據..."):
+            eps, pe, rev, news_list = get_heavy_duty_data(f_id)
+            st.markdown(f"#### 📊 {f_id} 核心基本面數據")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("近四季 EPS (元)", f"{eps:.2f}" if eps else "—")
+            c2.metric("本益比 (P/E)", f"{pe:.2f}" if pe else "—")
+            c3.metric("最新營收年增率 (YoY)", rev if rev else "—")
+            if rev and rev != "資料暫缺" and float(rev.replace('%','').strip()) > 10:
+                st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
+            st.divider()
+            st.markdown("#### 🧠 AI 消息面情感解析與深度導讀")
+            st.info(advanced_ai_sentiment(news_list, f_id))
 
 # ==========================================
-# 分頁 2: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")

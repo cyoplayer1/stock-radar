@@ -142,7 +142,7 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.subheader("🎙️ AI 語音早報")
     
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
-        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
+        with st.spinner("綜專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
             report_text = f"綜早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您修車與操作一切順利！"

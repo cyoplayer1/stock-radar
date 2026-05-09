@@ -273,7 +273,7 @@ def get_heavy_duty_data(symbol):
         return eps, pe, rev_str, news
     except: return None, None, None, []
 
-# === AI 深度新聞解讀 ===
+# === AI 深度新聞解讀 (升級版) ===
 def advanced_ai_sentiment(news_list, symbol):
     if not news_list: return "⚪ 尚無近期財經新聞可供分析。"
     pos_words = ['增', '漲', '高', '優', '強', '大單', '受惠', '利多', '新高', '突破', '買超', '雙增', '上看']
@@ -335,13 +335,11 @@ def get_hot_rank_ids():
                     df_tmp['val'] = pd.to_numeric(df_tmp['成交金額'].str.replace(',',''), errors='coerce')
                     hot_ids.update(df_tmp.sort_values('val', ascending=False).head(15)['證券代號'].tolist())
                     break
-        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
+        u2 = "https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&o=json"
         res2 = safe_get_json(u2, HEADERS)
-        data_otc = res2.get('aaData', []) or (res2.get('tables', [{}])[0].get('data', []) if 'tables' in res2 else [])
-        if data_otc:
-            df_otc = pd.DataFrame(data_otc)
-            cv = 9 if df_otc.shape[1] >= 10 else df_otc.shape[1] - 2
-            df_otc['val'] = pd.to_numeric(df_otc[cv].astype(str).str.replace(',',''), errors='coerce')
+        if 'aaData' in res2:
+            df_otc = pd.DataFrame(res2['aaData'])
+            df_otc['val'] = pd.to_numeric(df_otc[9].astype(str).str.replace(',',''), errors='coerce')
             hot_ids.update(df_otc.sort_values('val', ascending=False).head(15)[0].tolist())
     except: pass
     if not hot_ids: st.cache_data.clear()
@@ -700,7 +698,7 @@ ai_voice_report(tw_status if tw_status else "系統連線中")
 line_notify_setting()
 
 st.sidebar.markdown("---")
-main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達", "🏢 基本面與 AI 診斷"])
+main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🏢 基本面與 AI 診斷", "🕵️‍♂️ 00981A 經理人跟單雷達"])
 
 if main_page == "🎯 股神六星雷達系統":
     st.sidebar.subheader("⚙️ 自選股水庫")
@@ -725,7 +723,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 綜的股神系統：究極大滿配軍規版")
-    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
+    t1, t2, t3, t4 = st.tabs(["🎯 六星雷達掃描", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🧪 回測實驗室"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
@@ -861,28 +859,6 @@ if main_page == "🎯 股神六星雷達系統":
                 st.error("無法取得該檔股票資料，請確認代號是否正確。")
 
     with t4:
-        st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
-        if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
-            inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids()
-            danger_list = []
-            pb = st.progress(0)
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
-                for i, f in enumerate(as_completed(futs)):
-                    if i % 5 == 0 or i == len(s_list) - 1:
-                        pb.progress((i+1)/len(s_list))
-                    res = f.result()
-                    if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']):
-                        danger_list.append(res)
-            if danger_list:
-                df_danger = pd.DataFrame(danger_list)
-                st.error(f"🚨 **發現 {len(df_danger)} 檔高風險標的！請避免追高！**")
-                st.dataframe(df_danger[['標的', '看盤連結', '收盤', '處置與籌碼風險', '觸發條件']], use_container_width=True, column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")})
-            else:
-                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
-
-    with t5:
         st.markdown("### 🧪 策略回測實驗室 (2年期)")
         bt_id = st.text_input("🔍 欲回測標的代號", value="2317", key="bt_in")
         if st.button("🧪 執行歷史回測", use_container_width=True):
@@ -899,7 +875,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning("資料不足，無法回測。")
 
 # ==========================================
-# 分頁 2: 🏢 基本面與 AI 診斷 (獨立為大分頁)
+# 分頁 2: 🏢 基本面與 AI 診斷 (獨立大分頁)
 # ==========================================
 elif main_page == "🏢 基本面與 AI 診斷":
     st.title("🏢 基本面濾網與 AI 財報新聞分析")

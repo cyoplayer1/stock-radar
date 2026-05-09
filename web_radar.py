@@ -20,7 +20,7 @@ import io
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="綜 專屬：終極股神雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="老盧專屬：終極股神雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -74,7 +74,6 @@ def get_market_breadth():
     try:
         df = yf.Ticker("^TWII").history(period="1mo")
         if df.empty:
-            # 如果抓不到，給一個預設保護值，避免整個系統崩潰
             return None, None, "🟡 資料連線不穩 (請稍後重試或檢查網路)"
 
         df['MA20'] = df['Close'].rolling(20).mean()
@@ -102,7 +101,6 @@ def us_market_brain():
                 change = ((close_today - close_yest) / close_yest) * 100
                 delta_color = "normal" if change > 0 else "inverse"
                 
-                # 垂直排列，解決破版問題
                 st.sidebar.metric(
                     label=f"{name} ({ticker})", 
                     value=f"${close_today:.2f}", 
@@ -122,11 +120,10 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.subheader("🎙️ AI 語音早報")
     
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
-        with st.spinner("綜 專屬 AI 正在整理戰報並錄音中..."):
+        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
-            # 處理防呆狀態文字
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線，請留意風險"
-            report_text = f"綜早安，今天是{now}。大盤狀態：{status_text}。"
+            report_text = f"老盧早安，今天是{now}。大盤狀態：{status_text}。"
             report_text += f"關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您今天操作順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
@@ -195,34 +192,56 @@ def estimate_vwap(symbol, days):
     except: pass
     return None
 
+# === 🌟 模組修正：T6 基本面與新聞抓取 (引擎大翻修版) ===
 def get_fundamentals_and_news(symbol):
     try:
-        tkr = yf.Ticker(f"{symbol}.TW")
-        info = tkr.info
-        if not info or 'symbol' not in info:
-            tkr = yf.Ticker(f"{symbol}.TWO")
-            info = tkr.info
+        clean = symbol.replace('.TW','').replace('.TWO','')
+        tid = f"{clean}.TW"
+        tkr = yf.Ticker(tid)
         
+        info = tkr.info
+        if not info or len(info) <= 5:
+            tkr = yf.Ticker(f"{clean}.TWO")
+            info = tkr.info
+
         eps = info.get('trailingEps', None)
         pe = info.get('trailingPE', None)
         rev_growth = info.get('revenueGrowth', None)
-        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else None
+        
+        if eps and not pe:
+            hist = tkr.history(period="1d")
+            if not hist.empty:
+                current_p = hist['Close'].iloc[-1]
+                pe = current_p / eps
+
+        rev_growth_str = f"{rev_growth * 100:.2f} %" if rev_growth is not None else "資料暫缺"
         
         news = []
         try:
-            name = STOCKS_DICT.get(f"{symbol}.TW", STOCKS_DICT.get(f"{symbol}.TWO", "")).replace(" ", "")
-            query = f"{symbol}+{name}+股市"
-            url = f"https://news.google.com/rss/search?q={query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-            res = requests.get(url, headers=HEADERS, timeout=5)
-            root = ET.fromstring(res.content)
-            for item in root.findall('.//item')[:5]:
-                title = item.find('title').text
-                link = item.find('link').text if item.find('link') is not None else "#"
-                clean_title = title.rsplit(' - ', 1)[0]
-                news.append({'title': clean_title, 'link': link})
-        except: pass
+            name = STOCKS_DICT.get(f"{clean}.TW", STOCKS_DICT.get(f"{clean}.TWO", "該個股"))
+            query = f"{clean}+{name}"
+            url = f"https://news.google.com/rss/search?q={query}+股市&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            
+            res = requests.get(url, headers=HEADERS, timeout=7)
+            if res.status_code == 200:
+                root = ET.fromstring(res.content)
+                items = root.findall('.//item')
+                if not items:
+                    url = f"https://news.google.com/rss/search?q={clean}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+                    res = requests.get(url, headers=HEADERS, timeout=7)
+                    root = ET.fromstring(res.content)
+                    items = root.findall('.//item')
+                
+                for item in items[:5]:
+                    title = item.find('title').text
+                    link = item.find('link').text
+                    clean_title = title.rsplit(' - ', 1)[0]
+                    news.append({'title': clean_title, 'link': link})
+        except Exception as e:
+            pass
+            
         return eps, pe, rev_growth_str, news
-    except:
+    except Exception as e:
         return None, None, None, []
 
 def ai_news_sentiment(news_list):
@@ -660,7 +679,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 綜的股神系統：四維共振・大滿配終極版")
+    st.title("📡 稀有的股神系統：四維共振・大滿配終極版")
     t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
@@ -767,7 +786,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
-        st.markdown("### 🏰 綜 專屬：持股波段護城河監控")
+        st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
         st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
         
         c_moat1, c_moat2 = st.columns(2)
@@ -837,17 +856,17 @@ if main_page == "🎯 股神六星雷達系統":
 
     with t6:
         st.markdown("### 🏢 基本面濾網與 AI 財報新聞分析")
-        f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2330", key="fund_in")
+        f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2317", key="fund_in")
         if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
             with st.spinner("⚡ 正在爬取最新財報數據與 Google News 外電新聞..."):
                 eps, pe, rev, news_list = get_fundamentals_and_news(f_id)
                 ai_report = ai_news_sentiment(news_list)
                 st.markdown(f"#### 📊 {f_id} 核心基本面數據")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("近四季 EPS (元)", eps)
-                c2.metric("本益比 (P/E)", pe)
-                c3.metric("最新營收年增率 (YoY)", rev)
-                if rev is not None and float(rev.replace('%','').strip()) > 10:
+                c1.metric("近四季 EPS (元)", f"{eps:.2f}" if eps else "—")
+                c2.metric("本益比 (P/E)", f"{pe:.2f}" if pe else "—")
+                c3.metric("最新營收年增率 (YoY)", rev if rev else "—")
+                if rev and rev != "資料暫缺" and float(rev.replace('%','').strip()) > 10:
                     st.success("✅ **營收成長動能強勁！具備戴維斯雙擊潛力。**")
                 st.divider()
                 st.markdown("#### 🧠 AI 消息面情感解析")

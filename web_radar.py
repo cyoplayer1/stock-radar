@@ -20,7 +20,7 @@ import io
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧專屬：終極股神雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="綜 專屬：終極股神雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -47,8 +47,7 @@ def get_and_increment_view_count():
                 f.write(str(count))
             st.session_state['has_viewed'] = True
         except Exception as e:
-            print(f"無法寫入瀏覽次數: {e}")
-            
+            pass
     return count
 
 # === 3. 🛡️ 安全連線防護機制 ===
@@ -69,83 +68,66 @@ def safe_get_json(url, headers, max_retries=3):
             break
     return {}
 
-# === 4. 核心指標與大盤風向球 ===
-@st.cache_data(ttl=60)
+# === 4. 核心指標與大盤風向球 (備援防呆版) ===
+@st.cache_data(ttl=300)
 def get_market_breadth():
     try:
-        df = yf.Ticker("^TWII").history(period="3mo")
+        df = yf.Ticker("^TWII").history(period="1mo")
         if df.empty:
-            return None, None, "⚪ 未知 (資料獲取失敗)"
+            # 如果抓不到，給一個預設保護值，避免整個系統崩潰
+            return None, None, "🟡 資料連線不穩 (請稍後重試或檢查網路)"
 
         df['MA20'] = df['Close'].rolling(20).mean()
-        m20 = df['MA20'].iloc[-1]
-        c = df['Close'].iloc[-1] 
+        curr_p = df['Close'].iloc[-1]
+        ma20 = df['MA20'].iloc[-1]
         
-        try:
-            twse_url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw"
-            res = requests.get(twse_url, headers=HEADERS, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                z_price = data.get('msgArray', [{}])[0].get('z', '')
-                if z_price and z_price != '-':
-                    c = float(z_price)
-        except Exception:
-            pass
-            
-        try:
-            yh_url = "https://query1.finance.yahoo.com/v8/finance/chart/^TWII?interval=1m&range=1d"
-            res = requests.get(yh_url, headers=HEADERS, timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                c = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
-        except Exception:
-            pass
-        
-        status = "🟢 偏多順風 (站上月線，適合積極操作)" if c > m20 else "🔴 偏空逆風 (跌破月線，建議縮小部位)"
-        return round(c, 2), round(m20, 2), status
-        
-    except Exception as e: 
-        return None, None, "⚪ 未知 (資料獲取失敗)"
+        status = "🟢 偏多順風 (站上月線)" if curr_p > ma20 else "🔴 偏空逆風 (跌破月線)"
+        return round(curr_p, 2), round(ma20, 2), status
+    except Exception as e:
+        return None, None, "❌ 連線遭拒 (Yahoo API 阻擋)"
 
-# === 🌟 新增：美股大腦（供應鏈連動預判） ===
+# === 🌟 模組 A：美股大腦（垂直排版修復版） ===
 def us_market_brain():
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🌐 美股大腦 (收盤行情)")
+    st.sidebar.subheader("🌐 美股連動觀測")
     us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)"}
     
-    cols = st.sidebar.columns(3)
-    for idx, (ticker, name) in enumerate(us_tickers.items()):
+    for ticker, name in us_tickers.items():
         try:
             tk = yf.Ticker(ticker)
-            df = tk.history(period="2d")
+            df = tk.history(period="1mo")
             if not df.empty and len(df) >= 2:
                 close_today = df['Close'].iloc[-1]
                 close_yest = df['Close'].iloc[-2]
-                last_date = df.index[-1].strftime('%m/%d')
-                pct_change = ((close_today - close_yest) / close_yest) * 100
-                delta_color = "normal" if pct_change > 0 else "inverse"
+                change = ((close_today - close_yest) / close_yest) * 100
+                delta_color = "normal" if change > 0 else "inverse"
                 
-                cols[idx].metric(label=f"{name.split()[0]}\n({last_date})", 
-                                 value=f"${close_today:.2f}", 
-                                 delta=f"{pct_change:.2f}%", 
-                                 delta_color=delta_color)
+                # 垂直排列，解決破版問題
+                st.sidebar.metric(
+                    label=f"{name} ({ticker})", 
+                    value=f"${close_today:.2f}", 
+                    delta=f"{change:.2f}%", 
+                    delta_color=delta_color
+                )
             else:
-                 cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
+                 st.sidebar.metric(label=name, value="N/A", delta="-")
         except Exception:
-            cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
+            st.sidebar.metric(label=name, value="Error", delta="-")
             
-    st.sidebar.caption("💡 老盧提示：若 ARM/TSM 同步大漲，留意聯詠連動跳空。")
+    st.sidebar.caption("💡 提示：若 ARM/TSM 同步大漲，留意聯詠連動跳空。")
 
-# === 🌟 新增：AI 語音操盤秘書 ===
+# === 🌟 模組 B：AI 語音操盤秘書 ===
 def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎙️ AI 語音早報")
     
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
-        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
+        with st.spinner("綜 專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
-            report_text = f"老盧早安，今天是{now}。大盤目前處於{market_status}。"
-            report_text += f"關於您的核心持股{stock_id}，目前股價踩在關鍵紅K支撐之上，籌碼面主力偏多，建議您繼續穩穩抱著，祝您今天操作順利！"
+            # 處理防呆狀態文字
+            status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線，請留意風險"
+            report_text = f"綜早安，今天是{now}。大盤狀態：{status_text}。"
+            report_text += f"關於您的核心持股{stock_id}，請透過 VPVR 圖表確認是否踩在關鍵紅K支撐之上，祝您今天操作順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -153,7 +135,7 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
                 st.sidebar.audio(audio_fp, format='audio/mp3')
                 st.sidebar.success("✅ 早報已生成，請點擊上方播放！")
             except Exception as e:
-                st.sidebar.error(f"語音生成失敗: {e}")
+                st.sidebar.error("語音生成失敗，請確認已安裝 gTTS 套件。")
 
 # === 基礎指標函數 ===
 def calculate_kd(df):
@@ -645,13 +627,13 @@ if tw_c is not None:
     if "綠" in tw_status or "多" in tw_status: st.sidebar.success(tw_status)
     else: st.sidebar.error(tw_status)
 else:
-    st.sidebar.warning("大盤資料讀取中... 或連線遭拒")
+    st.sidebar.warning(tw_status)
 
 # 呼叫美股連動大腦
 us_market_brain()
 
 # 呼叫語音早報
-ai_voice_report(tw_status if tw_status else "讀取中")
+ai_voice_report(tw_status if tw_status else "系統連線中")
 
 st.sidebar.markdown("---")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
@@ -678,7 +660,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 稀有的股神系統：四維共振・大滿配終極版")
+    st.title("📡 綜的股神系統：四維共振・大滿配終極版")
     t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
@@ -785,7 +767,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
-        st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
+        st.markdown("### 🏰 綜 專屬：持股波段護城河監控")
         st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
         
         c_moat1, c_moat2 = st.columns(2)

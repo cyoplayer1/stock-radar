@@ -14,11 +14,13 @@ import urllib3
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 import os
 import xml.etree.ElementTree as ET
+from gtts import gTTS
+import io
 
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="老盧專屬：稀有股神雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="老盧專屬：終極股神雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -49,7 +51,7 @@ def get_and_increment_view_count():
             
     return count
 
-# === 3. 🛡️ 安全連線防護機制 (強化版) ===
+# === 3. 🛡️ 安全連線防護機制 ===
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -57,20 +59,17 @@ def safe_get_json(url, headers, max_retries=3):
             response.raise_for_status() 
             return response.json()
         except requests.exceptions.HTTPError as e:
-            print(f"[HTTP 錯誤] {url} -> {e}")
             if response.status_code in [403, 429]: 
                 time.sleep(3)
             else:
                 time.sleep(1)
         except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
-            print(f"[連線錯誤] {url} -> {e}")
             time.sleep(2)
         except Exception as e:
-            print(f"[未知錯誤] {url} -> {e}")
             break
     return {}
 
-# === 4. 核心指標與大盤風向球 (終極即時版) ===
+# === 4. 核心指標與大盤風向球 ===
 @st.cache_data(ttl=60)
 def get_market_breadth():
     try:
@@ -106,90 +105,57 @@ def get_market_breadth():
         return round(c, 2), round(m20, 2), status
         
     except Exception as e: 
-        print(f"取得大盤資料失敗: {e}")
         return None, None, "⚪ 未知 (資料獲取失敗)"
 
-# === 🌟 模組 A：美股大腦（供應鏈連動預判） ===
+# === 🌟 新增：美股大腦（供應鏈連動預判） ===
 def us_market_brain():
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🌐 美股大腦：昨夜AI戰況")
+    st.sidebar.subheader("🌐 美股大腦 (收盤行情)")
     us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)"}
     
     cols = st.sidebar.columns(3)
     for idx, (ticker, name) in enumerate(us_tickers.items()):
         try:
-            df = yf.Ticker(ticker).history(period="2d")
-            if len(df) >= 2:
+            tk = yf.Ticker(ticker)
+            df = tk.history(period="2d")
+            if not df.empty and len(df) >= 2:
                 close_today = df['Close'].iloc[-1]
                 close_yest = df['Close'].iloc[-2]
+                last_date = df.index[-1].strftime('%m/%d')
                 pct_change = ((close_today - close_yest) / close_yest) * 100
                 delta_color = "normal" if pct_change > 0 else "inverse"
-                cols[idx].metric(label=name.split()[0], value=f"${close_today:.1f}", delta=f"{pct_change:.1f}%", delta_color=delta_color)
+                
+                cols[idx].metric(label=f"{name.split()[0]}\n({last_date})", 
+                                 value=f"${close_today:.2f}", 
+                                 delta=f"{pct_change:.2f}%", 
+                                 delta_color=delta_color)
             else:
                  cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
         except Exception:
             cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
             
-    st.sidebar.caption("💡 老盧提示：若 ARM/TSM 同步大漲，留意今日聯詠連動跳空。")
+    st.sidebar.caption("💡 老盧提示：若 ARM/TSM 同步大漲，留意聯詠連動跳空。")
 
-# === 🌟 模組 B：VPVR 進階籌碼透視繪圖 ===
-def plot_advanced_chart_with_vpvr(symbol, cost_price, period="6mo"):
-    tid = symbol + ".TW" if "." not in symbol else symbol
-    df = yf.Ticker(tid).history(period=period)
-    df.dropna(subset=['Close'], inplace=True)
+# === 🌟 新增：AI 語音操盤秘書 ===
+def ai_voice_report(market_status, stock_id="3034 聯詠"):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎙️ AI 語音早報")
     
-    if not df.empty:
-        # 計算 KD
-        if len(df) >= 9:
-            df['9_min'] = df['Low'].rolling(window=9).min()
-            df['9_max'] = df['High'].rolling(window=9).max()
-            df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
-            k_v, d_v, k, d = [], [], 50.0, 50.0
-            for rsv in df['RSV']:
-                if pd.isna(rsv):
-                    k_v.append(50.0); d_v.append(50.0)
-                else:
-                    k = (2/3) * k + (1/3) * rsv
-                    d = (2/3) * d + (1/3) * k
-                    k_v.append(k); d_v.append(d)
-            df['K'], df['D'] = k_v, d_v
+    if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
+        with st.spinner("老盧專屬 AI 正在整理戰報並錄音中..."):
+            now = datetime.datetime.now().strftime("%Y年%m月%d日")
+            report_text = f"老盧早安，今天是{now}。大盤目前處於{market_status}。"
+            report_text += f"關於您的核心持股{stock_id}，目前股價踩在關鍵紅K支撐之上，籌碼面主力偏多，建議您繼續穩穩抱著，祝您今天操作順利！"
+            try:
+                tts = gTTS(text=report_text, lang='zh-tw')
+                audio_fp = io.BytesIO()
+                tts.write_to_fp(audio_fp)
+                st.sidebar.audio(audio_fp, format='audio/mp3')
+                st.sidebar.success("✅ 早報已生成，請點擊上方播放！")
+            except Exception as e:
+                st.sidebar.error(f"語音生成失敗: {e}")
 
-        # 計算 VPVR
-        min_p = df['Low'].min()
-        max_p = df['High'].max()
-        bins = np.linspace(min_p, max_p, num=40)
-        df['Price_Bin'] = pd.cut(df['Close'], bins=bins)
-        vp = df.groupby('Price_Bin')['Volume'].sum().reset_index()
-        vp['Bin_Center'] = vp['Price_Bin'].apply(lambda x: x.mid).astype(float)
-        
-        # 建立雙Y軸圖表
-        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
-                            row_heights=[0.7, 0.3], column_widths=[0.8, 0.2], 
-                            horizontal_spacing=0.01, vertical_spacing=0.05)
-        
-        # 畫 K 線
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
-                                     low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-        # 畫 VPVR
-        fig.add_trace(go.Bar(x=vp['Volume'], y=vp['Bin_Center'], orientation='h', 
-                             name='籌碼密集區', marker_color='rgba(255, 209, 102, 0.5)'), row=1, col=2)
-        # 畫 KD 線
-        if 'K' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-            
-        # 標示老盧成本線
-        if cost_price > 0:
-            fig.add_hline(y=cost_price, line_dash="dash", line_color="#00cc96", 
-                          annotation_text=f"成本防護線 {cost_price}", annotation_position="top left", row=1, col=1)
-
-        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
-                          margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.error("資料讀取失敗，無法繪製圖表。")
-
-# === 原有核心運算與計算邏輯保留區 ===
+# === 基礎指標函數 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -444,6 +410,57 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         }
     except: return None
 
+# === 🌟 VPVR 進階籌碼繪圖邏輯 ===
+def plot_advanced_chart_with_vpvr(symbol, cost_price, period="6mo"):
+    tid = symbol + ".TW" if "." not in symbol else symbol
+    df = yf.Ticker(tid).history(period=period)
+    df.dropna(subset=['Close'], inplace=True)
+    
+    if not df.empty:
+        if len(df) >= 9:
+            df['9_min'] = df['Low'].rolling(window=9).min()
+            df['9_max'] = df['High'].rolling(window=9).max()
+            df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
+            k_v, d_v, k, d = [], [], 50.0, 50.0
+            for rsv in df['RSV']:
+                if pd.isna(rsv):
+                    k_v.append(50.0); d_v.append(50.0)
+                else:
+                    k = (2/3) * k + (1/3) * rsv
+                    d = (2/3) * d + (1/3) * k
+                    k_v.append(k); d_v.append(d)
+            df['K'], df['D'] = k_v, d_v
+
+        min_p = df['Low'].min()
+        max_p = df['High'].max()
+        bins = np.linspace(min_p, max_p, num=40)
+        df['Price_Bin'] = pd.cut(df['Close'], bins=bins)
+        vp = df.groupby('Price_Bin')['Volume'].sum().reset_index()
+        vp['Bin_Center'] = vp['Price_Bin'].apply(lambda x: x.mid).astype(float)
+        
+        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
+                            row_heights=[0.7, 0.3], column_widths=[0.8, 0.2], 
+                            horizontal_spacing=0.01, vertical_spacing=0.05)
+        
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
+                                     low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+        fig.add_trace(go.Bar(x=vp['Volume'], y=vp['Bin_Center'], orientation='h', 
+                             name='籌碼密集區', marker_color='rgba(255, 209, 102, 0.5)'), row=1, col=2)
+                             
+        if 'K' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+            
+        if cost_price > 0:
+            fig.add_hline(y=cost_price, line_dash="dash", line_color="#00cc96", 
+                          annotation_text=f"成本防護線 {cost_price}", annotation_position="top left", row=1, col=1)
+
+        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
+                          margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("資料讀取失敗，無法繪製圖表。")
+
 def diagnose_holding(ticker_in):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -633,6 +650,9 @@ else:
 # 呼叫美股連動大腦
 us_market_brain()
 
+# 呼叫語音早報
+ai_voice_report(tw_status if tw_status else "讀取中")
+
 st.sidebar.markdown("---")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
 
@@ -658,7 +678,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    st.title("📡 稀有的股神系統：四維共振・真・大滿配終極版")
+    st.title("📡 稀有的股神系統：四維共振・大滿配終極版")
     t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
@@ -714,8 +734,8 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.warning("目前沒有符合量能條件的標的，或是受到 API 流量限制 (Rate Limit) 影響，請稍後再試。")
 
-    # === VPVR 全新繪圖分頁 ===
     with t2:
+        st.markdown("### 📈 VPVR 籌碼透視 X 光機")
         col_t2_1, col_t2_2 = st.columns([1, 1])
         with col_t2_1:
             vpvr_id = st.text_input("🔍 欲透視的股票代號", value="3034", key="vpvr_in")

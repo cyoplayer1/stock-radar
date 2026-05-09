@@ -390,6 +390,45 @@ def diagnose_holding(ticker_in):
         }
     except: return None
 
+# 🛡️ 新增：自動抓取關鍵長紅 K 支撐邏輯
+def analyze_dynamic_moat(symbol, cost_price):
+    try:
+        clean = symbol.replace('.TW','').replace('.TWO','')
+        tid = clean + ".TW"
+        df = yf.Ticker(tid).history(period="3mo")
+        if df.empty:
+            tid = clean + ".TWO"
+            df = yf.Ticker(tid).history(period="3mo")
+        if df.empty or len(df) < 20: return None
+        
+        current_price = df['Close'].iloc[-1]
+        
+        # 尋找近 20 日成交量最大的實體紅 K
+        recent_df = df.tail(20)
+        bull_candles = recent_df[recent_df['Close'] > recent_df['Open']]
+        
+        if not bull_candles.empty:
+            max_vol_idx = bull_candles['Volume'].idxmax()
+            key_candle = bull_candles.loc[max_vol_idx]
+            # 中線防守點
+            support_price = round((key_candle['High'] + key_candle['Low']) / 2, 2)
+            date_str = max_vol_idx.strftime('%Y-%m-%d')
+            vol = int(key_candle['Volume'] / 1000)
+        else:
+            support_price = round(df['Close'].rolling(20).mean().iloc[-1], 2)
+            date_str = "月線 (近期無明顯帶量紅K)"
+            vol = 0
+            
+        return {
+            "current_price": round(current_price, 2),
+            "support_price": support_price,
+            "key_date": date_str,
+            "volume": vol,
+            "cost_price": cost_price
+        }
+    except:
+        return None
+
 def run_simple_backtest(symbol):
     try:
         tid = f"{symbol}.TW"
@@ -450,7 +489,6 @@ def get_00981a_holdings_history(force_refresh=False):
         df_history.to_csv(db_path, index=False)
         st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
     elif df_history.empty:
-        # 🔥 如果 API 被擋抓不到資料，自動進入火力全開測試模式
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
         dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         mock_scenarios = [
@@ -653,6 +691,39 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
+        # --- 全新加入的護城河監控模組 ---
+        st.markdown("---")
+        st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
+        st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
+        
+        c_moat1, c_moat2 = st.columns(2)
+        with c_moat1:
+            moat_id = st.text_input("🛡️ 持股代號", value="3034", key="moat_in")
+        with c_moat2:
+            cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0)
+            
+        if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
+            moat_data = analyze_dynamic_moat(moat_id, cost_p)
+            if moat_data:
+                current = moat_data['current_price']
+                support = moat_data['support_price']
+                cost = moat_data['cost_price']
+                
+                profit_pct = ((current - cost) / cost) * 100 if cost > 0 else 0
+                
+                st.markdown(f"#### 📊 {moat_id} 防護網狀態")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("目前股價", f"{current} 元")
+                m2.metric("關鍵紅K中線防禦", f"{support} 元", delta=f"基準日: {moat_data['key_date']}", delta_color="off")
+                m3.metric("您的帳面獲利", f"{profit_pct:.1f} %", delta=f"成本 {cost} 元")
+                
+                if current >= support:
+                    st.success(f"🎉 **狀態極佳！** 目前股價穩穩踩在帶量長紅 K ({moat_data['key_date']}) 的中線 **{support} 元** 之上，多頭格局強勢，安心續抱！")
+                else:
+                    st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線 **{support} 元**，請打開線圖確認支撐是否有效，並留意是否需要分批拔檔。")
+            else:
+                st.error("無法取得該檔股票資料，請確認代號是否正確。")
+
     with t4:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
         if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
@@ -761,7 +832,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df['市值預估'] = analyzed_df['最新持股張數'] * analyzed_df['最新收盤價_num'] * 1000
             total_assets = analyzed_df['市值預估'].sum()
             
-            # 🔥 測試模式專屬修復：將總資產放大3倍，修正「滿水位 28%」的不合理權重
             if not analyzed_df.empty and "測試" in str(analyzed_df['股票名稱'].iloc[0]):
                 total_assets = total_assets * 3
 

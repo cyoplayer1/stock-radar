@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -17,7 +18,7 @@ import xml.etree.ElementTree as ET
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="稀有的股神系統雷達", page_icon="📡", layout="wide")
+st.set_page_config(page_title="老盧專屬：稀有股神雷達", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -108,6 +109,87 @@ def get_market_breadth():
         print(f"取得大盤資料失敗: {e}")
         return None, None, "⚪ 未知 (資料獲取失敗)"
 
+# === 🌟 模組 A：美股大腦（供應鏈連動預判） ===
+def us_market_brain():
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌐 美股大腦：昨夜AI戰況")
+    us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)"}
+    
+    cols = st.sidebar.columns(3)
+    for idx, (ticker, name) in enumerate(us_tickers.items()):
+        try:
+            df = yf.Ticker(ticker).history(period="2d")
+            if len(df) >= 2:
+                close_today = df['Close'].iloc[-1]
+                close_yest = df['Close'].iloc[-2]
+                pct_change = ((close_today - close_yest) / close_yest) * 100
+                delta_color = "normal" if pct_change > 0 else "inverse"
+                cols[idx].metric(label=name.split()[0], value=f"${close_today:.1f}", delta=f"{pct_change:.1f}%", delta_color=delta_color)
+            else:
+                 cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
+        except Exception:
+            cols[idx].metric(label=name.split()[0], value="N/A", delta="-")
+            
+    st.sidebar.caption("💡 老盧提示：若 ARM/TSM 同步大漲，留意今日聯詠連動跳空。")
+
+# === 🌟 模組 B：VPVR 進階籌碼透視繪圖 ===
+def plot_advanced_chart_with_vpvr(symbol, cost_price, period="6mo"):
+    tid = symbol + ".TW" if "." not in symbol else symbol
+    df = yf.Ticker(tid).history(period=period)
+    df.dropna(subset=['Close'], inplace=True)
+    
+    if not df.empty:
+        # 計算 KD
+        if len(df) >= 9:
+            df['9_min'] = df['Low'].rolling(window=9).min()
+            df['9_max'] = df['High'].rolling(window=9).max()
+            df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
+            k_v, d_v, k, d = [], [], 50.0, 50.0
+            for rsv in df['RSV']:
+                if pd.isna(rsv):
+                    k_v.append(50.0); d_v.append(50.0)
+                else:
+                    k = (2/3) * k + (1/3) * rsv
+                    d = (2/3) * d + (1/3) * k
+                    k_v.append(k); d_v.append(d)
+            df['K'], df['D'] = k_v, d_v
+
+        # 計算 VPVR
+        min_p = df['Low'].min()
+        max_p = df['High'].max()
+        bins = np.linspace(min_p, max_p, num=40)
+        df['Price_Bin'] = pd.cut(df['Close'], bins=bins)
+        vp = df.groupby('Price_Bin')['Volume'].sum().reset_index()
+        vp['Bin_Center'] = vp['Price_Bin'].apply(lambda x: x.mid).astype(float)
+        
+        # 建立雙Y軸圖表
+        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
+                            row_heights=[0.7, 0.3], column_widths=[0.8, 0.2], 
+                            horizontal_spacing=0.01, vertical_spacing=0.05)
+        
+        # 畫 K 線
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
+                                     low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+        # 畫 VPVR
+        fig.add_trace(go.Bar(x=vp['Volume'], y=vp['Bin_Center'], orientation='h', 
+                             name='籌碼密集區', marker_color='rgba(255, 209, 102, 0.5)'), row=1, col=2)
+        # 畫 KD 線
+        if 'K' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='yellow')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D', line=dict(color='cyan')), row=2, col=1)
+            
+        # 標示老盧成本線
+        if cost_price > 0:
+            fig.add_hline(y=cost_price, line_dash="dash", line_color="#00cc96", 
+                          annotation_text=f"成本防護線 {cost_price}", annotation_position="top left", row=1, col=1)
+
+        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
+                          margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("資料讀取失敗，無法繪製圖表。")
+
+# === 原有核心運算與計算邏輯保留區 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -257,7 +339,7 @@ def get_hot_rank_ids():
     if not hot_ids: st.cache_data.clear()
     return hot_ids
 
-# === 5. 名單字典 ===
+# === 名單字典 ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
@@ -294,7 +376,7 @@ SECTOR_MAP = {
     "2308": "電源供應", "2345": "網通", "2603": "航運", "2609": "航運", "2881": "金融"
 }
 
-# === 6. 雷達掃描與診斷邏輯 ===
+# === 雷達掃描與診斷邏輯 ===
 def analyze_stock_score(ticker_in, inst_map, hot_list):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
@@ -352,7 +434,6 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
         
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean}/technical-analysis"
-        
         star_display = "⭐"*s if s>0 else "休息"
         if s >= 7: star_display = "🌟"*7
         
@@ -390,7 +471,6 @@ def diagnose_holding(ticker_in):
         }
     except: return None
 
-# 🛡️ 新增：自動抓取關鍵長紅 K 支撐邏輯
 def analyze_dynamic_moat(symbol, cost_price):
     try:
         clean = symbol.replace('.TW','').replace('.TWO','')
@@ -402,15 +482,12 @@ def analyze_dynamic_moat(symbol, cost_price):
         if df.empty or len(df) < 20: return None
         
         current_price = df['Close'].iloc[-1]
-        
-        # 尋找近 20 日成交量最大的實體紅 K
         recent_df = df.tail(20)
         bull_candles = recent_df[recent_df['Close'] > recent_df['Open']]
         
         if not bull_candles.empty:
             max_vol_idx = bull_candles['Volume'].idxmax()
             key_candle = bull_candles.loc[max_vol_idx]
-            # 中線防守點
             support_price = round((key_candle['High'] + key_candle['Low']) / 2, 2)
             date_str = max_vol_idx.strftime('%Y-%m-%d')
             vol = int(key_candle['Volume'] / 1000)
@@ -452,7 +529,7 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 7. 🕵️‍♂️ 經理人籌碼追蹤邏輯 (還原測試預覽版) ===
+# === 經理人籌碼追蹤邏輯 ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
     new_data = []
@@ -540,8 +617,8 @@ def analyze_manager_moves(df):
         })
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# === 8. 側邊欄與大盤風向球 ===
-st.sidebar.title("📡 導覽選單")
+# === 側邊欄與大盤風向球 ===
+st.sidebar.title("📡 老盧專屬：操盤導覽")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
@@ -552,17 +629,20 @@ if tw_c is not None:
     else: st.sidebar.error(tw_status)
 else:
     st.sidebar.warning("大盤資料讀取中... 或連線遭拒")
-st.sidebar.markdown("---")
 
+# 呼叫美股連動大腦
+us_market_brain()
+
+st.sidebar.markdown("---")
 main_page = st.sidebar.radio("跳轉頁面", ["🎯 股神六星雷達系統", "🕵️‍♂️ 00981A 經理人跟單雷達"])
 
 if main_page == "🎯 股神六星雷達系統":
     st.sidebar.subheader("⚙️ 自選股水庫")
     def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
-    u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=200)
+    u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=150)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
-# 🛡️ 系統維護區 & 瀏覽次數顯示
+# 系統維護區
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ 系統維護")
 if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
@@ -579,7 +659,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：四維共振・真・大滿配終極版")
-    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 互動看盤", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
+    t1, t2, t3, t4, t5, t6 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室", "🏢 基本面與 AI 診斷"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
@@ -634,22 +714,16 @@ if main_page == "🎯 股神六星雷達系統":
             else:
                 st.warning("目前沒有符合量能條件的標的，或是受到 API 流量限制 (Rate Limit) 影響，請稍後再試。")
 
+    # === VPVR 全新繪圖分頁 ===
     with t2:
-        st.markdown("### 📈 互動圖表：型態確認")
-        sid = st.text_input("🔍 代號", value="2330", key="chart_in")
-        if st.button("📈 繪圖", use_container_width=True):
-            tid = sid + ".TW" if "." not in sid else sid
-            df = yf.Ticker(tid).history(period="1y"); df.dropna(subset=['Close'], inplace=True)
-            if not df.empty:
-                d = calculate_kd(df)
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-                fig.add_trace(go.Candlestick(x=d.index, open=d['Open'], high=d['High'], low=d['Low'], close=d['Close'], name=tid), row=1, col=1)
-                fig.add_trace(go.Scatter(x=d.index, y=d['K'], name='K', line=dict(color='yellow')), row=2, col=1)
-                fig.add_trace(go.Scatter(x=d.index, y=d['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.error("繪圖失敗：無法取得報價。")
+        col_t2_1, col_t2_2 = st.columns([1, 1])
+        with col_t2_1:
+            vpvr_id = st.text_input("🔍 欲透視的股票代號", value="3034", key="vpvr_in")
+        with col_t2_2:
+            vpvr_cost = st.number_input("💰 標示您的成本防護線 (輸入 0 則不顯示)", value=431.0, step=1.0)
+            
+        if st.button("📈 繪製 VPVR 籌碼透視圖", use_container_width=True):
+            plot_advanced_chart_with_vpvr(vpvr_id, vpvr_cost)
 
     with t3:
         st.markdown("### 🛡️ 智能部位計算機與紀律診斷")
@@ -685,13 +759,11 @@ if main_page == "🎯 股神六星雷達系統":
                     * **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。
                     * **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。
                     """)
-                    
                     if suggested_shares > (v5_avg * 0.01):
-                        st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！大資金進出將產生嚴重滑價，建議降低部位或分批建倉！")
+                        st.error(f"💧 **流動性滑價警告**：大資金進出將產生滑價，建議降低部位或分批建倉！")
             else:
                 st.error("診斷失敗：無法取得足夠的歷史資料。")
 
-        # --- 全新加入的護城河監控模組 ---
         st.markdown("---")
         st.markdown("### 🏰 老盧專屬：持股波段護城河監控")
         st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
@@ -700,7 +772,7 @@ if main_page == "🎯 股神六星雷達系統":
         with c_moat1:
             moat_id = st.text_input("🛡️ 持股代號", value="3034", key="moat_in")
         with c_moat2:
-            cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0)
+            cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0, key="moat_cost")
             
         if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
             moat_data = analyze_dynamic_moat(moat_id, cost_p)
@@ -708,7 +780,6 @@ if main_page == "🎯 股神六星雷達系統":
                 current = moat_data['current_price']
                 support = moat_data['support_price']
                 cost = moat_data['cost_price']
-                
                 profit_pct = ((current - cost) / cost) * 100 if cost > 0 else 0
                 
                 st.markdown(f"#### 📊 {moat_id} 防護網狀態")
@@ -718,9 +789,9 @@ if main_page == "🎯 股神六星雷達系統":
                 m3.metric("您的帳面獲利", f"{profit_pct:.1f} %", delta=f"成本 {cost} 元")
                 
                 if current >= support:
-                    st.success(f"🎉 **狀態極佳！** 目前股價穩穩踩在帶量長紅 K ({moat_data['key_date']}) 的中線 **{support} 元** 之上，多頭格局強勢，安心續抱！")
+                    st.success(f"🎉 **狀態極佳！** 股價穩踩在帶量長紅 K ({moat_data['key_date']}) 的中線 **{support} 元** 之上，多頭格局強勢，安心續抱！")
                 else:
-                    st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線 **{support} 元**，請打開線圖確認支撐是否有效，並留意是否需要分批拔檔。")
+                    st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線 **{support} 元**，請留意是否需要分批拔檔。")
             else:
                 st.error("無法取得該檔股票資料，請確認代號是否正確。")
 
@@ -742,17 +813,12 @@ if main_page == "🎯 股神六星雷達系統":
             if danger_list:
                 df_danger = pd.DataFrame(danger_list)
                 st.error(f"🚨 **發現 {len(df_danger)} 檔高風險標的！請避免追高！**")
-                st.dataframe(
-                    df_danger[['標的', '看盤連結', '收盤', '處置與籌碼風險', '觸發條件']], 
-                    use_container_width=True,
-                    column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")}
-                )
+                st.dataframe(df_danger[['標的', '看盤連結', '收盤', '處置與籌碼風險', '觸發條件']], use_container_width=True, column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")})
             else:
-                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的，或正在等待 API 冷卻。")
+                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
 
     with t5:
         st.markdown("### 🧪 策略回測實驗室 (2年期)")
-        st.markdown("驗證『突破月線買進、跌破月線賣出』的波段策略，在過去兩年套用於該股票的真實績效。")
         bt_id = st.text_input("🔍 欲回測標的代號", value="2317", key="bt_in")
         if st.button("🧪 執行歷史回測", use_container_width=True):
             res = run_simple_backtest(bt_id)
@@ -769,7 +835,6 @@ if main_page == "🎯 股神六星雷達系統":
 
     with t6:
         st.markdown("### 🏢 基本面濾網與 AI 財報新聞分析")
-        st.markdown("結合企業獲利動能與最新市場消息，打造「技術＋籌碼＋基本面＋消息面」四維防護。")
         f_id = st.text_input("🔍 欲查探基本面的標的代號", value="2330", key="fund_in")
         if st.button("🧠 啟動 AI 智能診斷", use_container_width=True):
             with st.spinner("⚡ 正在爬取最新財報數據與 Google News 外電新聞..."):

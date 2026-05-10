@@ -653,31 +653,16 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{get_and_increment_view
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：阿綜大滿配軍規版")
     
-    # --- 6 個核心分頁 ---
-    t_top, t1, t2, t3, t4, t5 = st.tabs([
-        "🔥 金流 Top 15", 
+    # --- 6 個核心分頁 (依照要求調順序) ---
+    t1, t_top, t2, t3, t4, t5 = st.tabs([
         "🎯 六星雷達掃描", 
+        "🔥 金流 Top 15", 
         "📈 VPVR 進階圖", 
         "🛡️ 智能部位診斷", 
         "🚨 處置與隔日沖", 
         "🧪 回測實驗室"
     ])
     
-    with t_top:
-        st.markdown("### 🔥 全市場成交值 Top 15 (金流觀測)")
-        tse_top, otc_top = fetch_top15_ranking()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.caption("🏆 上市成交值排行 (TWSE)")
-            if not tse_top.empty:
-                st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-            else: st.warning("上市數據獲取失敗，請檢查 API 連線。")
-        with col2:
-            st.caption("🏆 上櫃成交值排行 (TPEX)")
-            if not otc_top.empty:
-                st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-            else: st.warning("上櫃數據獲取失敗，請檢查 API 連線。")
-
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
         st.info("""
@@ -715,6 +700,21 @@ if main_page == "🎯 股神六星雷達系統":
                 st.dataframe(display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件']), use_container_width=True, hide_index=True, column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")})
             else:
                 st.warning("目前沒有符合條件的標的，請檢查網路連線。")
+
+    with t_top:
+        st.markdown("### 🔥 全市場成交值 Top 15 (金流觀測)")
+        tse_top, otc_top = fetch_top15_ranking()
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("🏆 上市成交值排行 (TWSE)")
+            if not tse_top.empty:
+                st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+            else: st.warning("上市數據獲取失敗，請檢查 API 連線。")
+        with col2:
+            st.caption("🏆 上櫃成交值排行 (TPEX)")
+            if not otc_top.empty:
+                st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+            else: st.warning("上櫃數據獲取失敗，請檢查 API 連線。")
 
     with t2:
         st.markdown("### 📈 VPVR 籌碼透視 X 光機")

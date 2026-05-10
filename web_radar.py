@@ -129,7 +129,7 @@ def adr_premium_calculator():
         st.sidebar.warning("API 冷卻中，無法計算 ADR 溢價。")
 
 # === 🌟 模組 B：AI 語音操盤秘書 (阿綜專屬) ===
-def ai_voice_report(market_status, stock_id="3034 聯詠"):
+def ai_voice_report(market_status):
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎙️ AI 語音早報")
     
@@ -137,7 +137,7 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
         with st.spinner("阿綜專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
-            report_text = f"阿綜早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據已更新。請透過 VPVR 圖表確認持股是否踩在關鍵紅K支撐之上，祝您修車與操作順利！"
+            report_text = f"阿綜早安，今天是{now}。大盤狀態：{status_text}。排行榜與籌碼數據已更新，祝您修車與操作順利，獲利翻倍！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -164,7 +164,42 @@ def line_notify_setting():
         else:
             st.sidebar.warning("請先輸入 Token！")
 
-# === 基礎指標函數 ===
+# === 🌟 模組 D：成交值 Top 15 自動回溯抓取 ===
+@st.cache_data(ttl=3600)
+def fetch_top15_ranking():
+    tse_df, otc_df = pd.DataFrame(), pd.DataFrame()
+    today = datetime.datetime.now()
+    dates = [(today - datetime.timedelta(days=i)).strftime('%Y%m%d') for i in range(5)]
+    
+    # 上市
+    for d_str in dates:
+        url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={d_str}&type=ALLBUT0999"
+        res = safe_get_json(url, HEADERS)
+        if res and 'tables' in res:
+            for tb in res['tables']:
+                if '成交金額' in tb.get('fields', []):
+                    df = pd.DataFrame(tb['data'], columns=tb['fields'])
+                    df['v'] = pd.to_numeric(df['成交金額'].str.replace(',',''), errors='coerce')
+                    tse_df = df.sort_values('v', ascending=False).head(15)[['證券代號','證券名稱','收盤價','v']]
+                    break
+        if not tse_df.empty: break
+
+    # 上櫃
+    for d_str in dates:
+        tw_y = int(d_str[:4]) - 1911
+        otc_d = f"{tw_y}/{d_str[4:6]}/{d_str[6:]}"
+        url = f"https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&d={otc_d}&o=json"
+        res = safe_get_json(url, HEADERS)
+        if res and 'aaData' in res and len(res['aaData']) > 0:
+            df = pd.DataFrame(res['aaData'])
+            df['v'] = pd.to_numeric(df[9].astype(str).str.replace(',',''), errors='coerce')
+            otc_df = df.sort_values('v', ascending=False).head(15)[[0, 1, 2, 'v']]
+            otc_df.columns = ['證券代號','證券名稱','收盤價','v']
+            break
+            
+    return tse_df, otc_df
+
+# === 基礎指標與爬蟲函數 ===
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -222,32 +257,25 @@ def estimate_vwap(symbol, days):
     except: pass
     return None
 
-# === 🌟 模組重型備援版：基本面與新聞抓取 ===
 def get_heavy_duty_data(symbol):
     try:
         clean = symbol.replace('.TW','').replace('.TWO','')
         tid = f"{clean}.TW"
         tkr = yf.Ticker(tid)
-        
         eps, pe, rev_growth = None, None, None
-        
         try:
             info = tkr.info
             eps = info.get('trailingEps')
             pe = info.get('trailingPE')
             rev_growth = info.get('revenueGrowth')
         except: pass
-        
         if not eps:
             try: eps = tkr.fast_info.get('last_price') / 15 
             except: pass
-
         if eps and not pe:
             hist = tkr.history(period="1d")
             if not hist.empty: pe = hist['Close'].iloc[-1] / eps
-
         rev_str = f"{rev_growth * 100:.2f} %" if rev_growth else "資料暫缺"
-        
         news = []
         try:
             name = STOCKS_DICT.get(f"{clean}.TW", clean)
@@ -263,11 +291,9 @@ def get_heavy_duty_data(symbol):
                         'link': item.find('link').text
                     })
         except: pass
-            
         return eps, pe, rev_str, news
     except: return None, None, None, []
 
-# === AI 深度新聞解讀 ===
 def advanced_ai_sentiment(news_list, symbol):
     if not news_list: return "⚪ 尚無近期財經新聞可供分析。"
     pos_words = ['增', '漲', '高', '優', '強', '大單', '受惠', '利多', '新高', '突破', '買超', '雙增', '上看']
@@ -279,28 +305,18 @@ def advanced_ai_sentiment(news_list, symbol):
         formatted_news += f"- [{t}]({n.get('link', '#')})\n"
         score += sum(1 for w in pos_words if w in t)
         score -= sum(1 for w in neg_words if w in t)
-        
     if score >= 2: 
         status = "🟢 【趨勢判定：強勢多頭】"
         reason = f"主力與媒體共識極高，利多頻傳。若股價已處高檔，請留意『利多出盡』；若剛突破月線，為極佳的佈局點。"
     elif score <= -2: 
         status = "🔴 【趨勢判定：風險警戒】"
-        reason = f"雜音與利空湧現。切勿輕易摸底猜低點，請嚴格執行紀律，跌破阿綜防護線立刻拔檔。"
+        reason = f"雜音與利空湧現。切勿輕易摸底猜低點，請嚴格執行紀律，跌破防護線立刻拔檔。"
     else: 
         status = "🟡 【趨勢判定：中性震盪】"
-        reason = f"消息面無極端方向，市場正在觀望財報或法人後續動態，請完全回歸 VPVR 籌碼密集區作為進出依據。"
-
-    report = f"""
-    {status}
-    * **AI 核心導讀**：{reason}
-    * **操作建議**：搭配下方護城河系統，若未破底請續抱；遇大漲爆量不追高。
-    
-    **📰 AI 彙整最新關鍵情報：**
-    {formatted_news}
-    """
+        reason = f"消息面無極端方向，市場正在觀望財報或法人動態，請回歸 VPVR 籌碼密集區操作。"
+    report = f"{status}\n* **AI 核心導讀**：{reason}\n* **操作建議**：搭配下方護城河系統操作。\n\n**📰 最新情報：**\n{formatted_news}"
     return report
 
-# === 🌟 籌碼與假日回溯排行 ===
 @st.cache_data(ttl=3600)
 def get_inst_data():
     inst_map = {}
@@ -314,44 +330,7 @@ def get_inst_data():
         if 'aaData' in r2:
             for d in r2['aaData']: inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
     except: pass
-    if not inst_map: st.cache_data.clear()
     return inst_map
-
-@st.cache_data(ttl=300)
-def get_hot_rank_ids():
-    hot_ids = set()
-    today = datetime.datetime.now()
-    dates_to_try = [(today - datetime.timedelta(days=i)).strftime('%Y%m%d') for i in range(5)]
-    
-    found_tse = False
-    for d_str in dates_to_try:
-        url_tse = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={d_str}&type=ALLBUT0999"
-        res_tse = safe_get_json(url_tse, HEADERS)
-        if res_tse and 'tables' in res_tse:
-            for tb in res_tse['tables']:
-                if '成交金額' in tb.get('fields', []):
-                    df = pd.DataFrame(tb['data'], columns=tb['fields'])
-                    df['val'] = pd.to_numeric(df['成交金額'].str.replace(',',''), errors='coerce')
-                    hot_ids.update(df.sort_values('val', ascending=False).head(15)['證券代號'].tolist())
-                    found_tse = True
-                    break
-        if found_tse: break
-
-    found_otc = False
-    for d_str in dates_to_try:
-        tw_year = int(d_str[:4]) - 1911
-        otc_d = f"{tw_year}/{d_str[4:6]}/{d_str[6:]}"
-        url_otc = f"https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&d={otc_d}&o=json"
-        res_otc = safe_get_json(url_otc, HEADERS)
-        if res_otc and 'aaData' in res_otc and len(res_otc['aaData']) > 0:
-            df_otc = pd.DataFrame(res_otc['aaData'])
-            df_otc['val'] = pd.to_numeric(df_otc[9].astype(str).str.replace(',',''), errors='coerce')
-            hot_ids.update(df_otc.sort_values('val', ascending=False).head(15)[0].tolist())
-            found_otc = True
-            break
-            
-    if not hot_ids: st.cache_data.clear()
-    return hot_ids
 
 # === 名單字典 (完整 112 檔) ===
 STOCKS_DICT = {
@@ -428,25 +407,16 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
         if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
         
-        is_higher_low = df['Low'].iloc[-1] >= df['Low'].iloc[-2]
-        is_higher_high = df['High'].iloc[-1] > df['High'].iloc[-2]
-        is_above_ma20 = c > df['MA20'].iloc[-1]
-        if is_higher_low and is_higher_high and is_above_ma20:
-            s+=1
-            tags.append("👑[強勢底底高架構]")
-            
-        if clean in hot_list: tags.append("🔥[排行熱門]")
+        if clean in hot_list: s+=2; tags.append("🔥[排行熱門]")
         inst_val = inst_map.get(clean, 0)
         if inst_val > 500: tags.append("🔴[大戶進駐]")
-        if is_warning: tags.append("🚨[處置警戒]")
-        if is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]")
+        
+        risk_level = "✅ 安全"
+        if is_warning: risk_level = "🚨 高風險 (處置前兆)"
+        elif is_daytrader_trap: tags.append("🪤[隔日沖倒貨區]"); risk_level = "⚠️ 留意隔日沖砸盤"
         
         inst_display = f"{inst_val:,}" if inst_val != 0 else "--"
         name = STOCKS_DICT.get(tid, clean)
-        risk_level = "✅ 安全"
-        if is_warning: risk_level = "🚨 高風險 (處置前兆)"
-        elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
-        
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean}/technical-analysis"
         star_display = "⭐"*s if s>0 else "休息"
         if s >= 7: star_display = "🌟"*7
@@ -458,65 +428,35 @@ def analyze_stock_score(ticker_in, inst_map, hot_list):
         }
     except: return None
 
-# === 🌟 VPVR 進階籌碼繪圖邏輯 ===
 def plot_advanced_chart_with_vpvr(symbol, cost_price, period="6mo"):
     tid = symbol + ".TW" if "." not in symbol else symbol
     df = yf.Ticker(tid).history(period=period)
     df.dropna(subset=['Close'], inplace=True)
-    
     if not df.empty:
         if len(df) >= 9:
-            df['9_min'] = df['Low'].rolling(window=9).min()
-            df['9_max'] = df['High'].rolling(window=9).max()
-            df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
-            k_v, d_v, k, d = [], [], 50.0, 50.0
-            for rsv in df['RSV']:
-                if pd.isna(rsv):
-                    k_v.append(50.0); d_v.append(50.0)
-                else:
-                    k = (2/3) * k + (1/3) * rsv
-                    d = (2/3) * d + (1/3) * k
-                    k_v.append(k); d_v.append(d)
-            df['K'], df['D'] = k_v, d_v
-
-        min_p = df['Low'].min()
-        max_p = df['High'].max()
-        bins = np.linspace(min_p, max_p, num=40)
+            df = calculate_kd(df)
+        bins = np.linspace(df['Low'].min(), df['High'].max(), num=40)
         df['Price_Bin'] = pd.cut(df['Close'], bins=bins)
         vp = df.groupby('Price_Bin')['Volume'].sum().reset_index()
         vp['Bin_Center'] = vp['Price_Bin'].apply(lambda x: x.mid).astype(float)
         
-        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
-                            row_heights=[0.7, 0.3], column_widths=[0.8, 0.2], 
-                            horizontal_spacing=0.01, vertical_spacing=0.05)
-        
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], 
-                                     low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
-        fig.add_trace(go.Bar(x=vp['Volume'], y=vp['Bin_Center'], orientation='h', 
-                             name='籌碼密集區', marker_color='rgba(255, 209, 102, 0.5)'), row=1, col=2)
-                             
+        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True, row_heights=[0.7, 0.3], column_widths=[0.8, 0.2], horizontal_spacing=0.01, vertical_spacing=0.05)
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線'), row=1, col=1)
+        fig.add_trace(go.Bar(x=vp['Volume'], y=vp['Bin_Center'], orientation='h', name='籌碼密集區', marker_color='rgba(255, 209, 102, 0.5)'), row=1, col=2)
         if 'K' in df.columns:
             fig.add_trace(go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='yellow')), row=2, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['D'], name='D', line=dict(color='cyan')), row=2, col=1)
-            
         if cost_price > 0:
-            fig.add_hline(y=cost_price, line_dash="dash", line_color="#00cc96", 
-                          annotation_text=f"阿綜防線 {cost_price}", annotation_position="top left", row=1, col=1)
-
-        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False,
-                          margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+            fig.add_hline(y=cost_price, line_dash="dash", line_color="#00cc96", annotation_text=f"阿綜防線 {cost_price}", annotation_position="top left", row=1, col=1)
+        fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.error("資料讀取失敗，無法繪製圖表。")
+    else: st.error("資料讀取失敗，無法繪製圖表。")
 
 def diagnose_holding(ticker_in):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
         tid = clean + ".TW"; df = yf.Ticker(tid).history(period="6mo")
-        df.dropna(subset=['Close'], inplace=True)
-        if df.empty:
-            tid = clean + ".TWO"; df = yf.Ticker(tid).history(period="6mo")
-            df.dropna(subset=['Close'], inplace=True)
+        if df.empty: df = yf.Ticker(clean + ".TWO").history(period="6mo")
         if df.empty or len(df) < 30: return None
         fc, _ = get_fugle_realtime(clean)
         if fc: df.iloc[-1, df.columns.get_loc('Close')] = fc
@@ -524,74 +464,47 @@ def diagnose_holding(ticker_in):
         c, m5, m20 = df['Close'].iloc[-1], df['MA5'].iloc[-1], df['MA20'].iloc[-1]
         k, d = df['K'].iloc[-1], df['D'].iloc[-1]
         v5_lots = int(df['Volume'].iloc[-6:-1].mean() / 1000)
-        
         status, action = [], "🟢 續抱 (趨勢健康)"
         if c < m20: status.append("⚠️ 跌破月線"); action = "🛑 建議停損/停利"
         elif c < m5: status.append("⚠️ 跌破5日線"); action = "🟡 建議先減碼一半"
         if k < d and df['K'].iloc[-2] >= df['D'].iloc[-2] and k > 70: status.append("⚠️ KD高檔死叉"); action = "🟡 建議拔檔減碼"
         if not status: status.append("✅ 強勢多頭")
-        return {
-            "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
-            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
-        }
+        return {"標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)}
     except: return None
 
 def analyze_dynamic_moat(symbol, cost_price):
     try:
         clean = symbol.replace('.TW','').replace('.TWO','')
-        tid = clean + ".TW"
-        df = yf.Ticker(tid).history(period="3mo")
-        if df.empty:
-            tid = clean + ".TWO"
-            df = yf.Ticker(tid).history(period="3mo")
+        df = yf.Ticker(f"{clean}.TW").history(period="3mo")
+        if df.empty: df = yf.Ticker(f"{clean}.TWO").history(period="3mo")
         if df.empty or len(df) < 20: return None
-        
         current_price = df['Close'].iloc[-1]
         recent_df = df.tail(20)
         bull_candles = recent_df[recent_df['Close'] > recent_df['Open']]
-        
         if not bull_candles.empty:
             max_vol_idx = bull_candles['Volume'].idxmax()
             key_candle = bull_candles.loc[max_vol_idx]
             support_price = round((key_candle['High'] + key_candle['Low']) / 2, 2)
             date_str = max_vol_idx.strftime('%Y-%m-%d')
-            vol = int(key_candle['Volume'] / 1000)
         else:
             support_price = round(df['Close'].rolling(20).mean().iloc[-1], 2)
-            date_str = "月線 (近期無明顯帶量紅K)"
-            vol = 0
-            
-        return {
-            "current_price": round(current_price, 2),
-            "support_price": support_price,
-            "key_date": date_str,
-            "volume": vol,
-            "cost_price": cost_price
-        }
-    except:
-        return None
+            date_str = "月線 (近期無帶量紅K)"
+        return {"current_price": round(current_price, 2), "support_price": support_price, "key_date": date_str, "cost_price": cost_price}
+    except: return None
 
 def run_simple_backtest(symbol):
     try:
-        tid = f"{symbol}.TW"
-        df = yf.Ticker(tid).history(period="2y")
-        if df.empty:
-            tid = f"{symbol}.TWO"
-            df = yf.Ticker(tid).history(period="2y")
+        df = yf.Ticker(f"{symbol.replace('.TW','').replace('.TWO','')}.TW").history(period="2y")
+        if df.empty: df = yf.Ticker(f"{symbol.replace('.TW','').replace('.TWO','')}.TWO").history(period="2y")
         if len(df) < 60: return None
-        
         df['MA20'] = df['Close'].rolling(20).mean()
         df = df.dropna()
-        
-        df['Signal'] = 0
-        df.loc[df['Close'] > df['MA20'], 'Signal'] = 1
+        df['Signal'] = 0; df.loc[df['Close'] > df['MA20'], 'Signal'] = 1
         df['Return'] = df['Close'].pct_change()
         df['Strategy_Return'] = df['Signal'].shift(1) * df['Return']
         df['Equity'] = (1 + df['Strategy_Return'].fillna(0)).cumprod() * 100
-        
         win_rate = len(df[df['Strategy_Return'] > 0]) / len(df[df['Strategy_Return'] != 0]) if len(df[df['Strategy_Return'] != 0]) > 0 else 0
-        total_return = df['Equity'].iloc[-1] - 100
-        return df, win_rate, total_return
+        return df, win_rate, df['Equity'].iloc[-1] - 100
     except: return None
 
 # === 經理人籌碼追蹤邏輯 ===
@@ -602,21 +515,15 @@ def fetch_today_holdings_from_api(etf_code="00981A"):
     res = safe_get_json(url_twse, HEADERS)
     if res and 'data' in res and len(res['data']) > 0:
         for row in res['data']:
-            ticker = str(row[0]).strip()
-            name = str(row[1]).strip()
-            shares = int(row[2].replace(',', '')) // 1000 
-            new_data.append([today, ticker, name, shares])
+            new_data.append([today, str(row[0]).strip(), str(row[1]).strip(), int(row[2].replace(',', '')) // 1000])
     return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
 def get_00981a_holdings_history(force_refresh=False):
     db_path = "00981A_holdings_db.csv"
     today_str = datetime.datetime.today().strftime('%Y-%m-%d')
+    if os.path.exists(db_path): df_history = pd.read_csv(db_path)
+    else: df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
     
-    if os.path.exists(db_path):
-        df_history = pd.read_csv(db_path)
-    else:
-        df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
-        
     if not df_history.empty and today_str in df_history['日期'].values and not force_refresh:
         return df_history
         
@@ -625,7 +532,6 @@ def get_00981a_holdings_history(force_refresh=False):
             
     with st.spinner("🔄 正在從連線獲取經理人今日最新持股..."):
         df_today = fetch_today_holdings_from_api("00981A")
-        
     if not df_today.empty:
         df_history = pd.concat([df_history, df_today], ignore_index=True)
         df_history.to_csv(db_path, index=False)
@@ -637,11 +543,7 @@ def get_00981a_holdings_history(force_refresh=False):
             ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
             ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
             ("3017", "奇鋐", [800, 800, 1200, 1800]), ("2345", "智邦", [1000, 1200, 1500, 1900]),
-            ("3533", "嘉澤", [600, 600, 700, 900]), ("2330", "台積電", [8000, 8000, 8000, 8000]),
-            ("2454", "聯發科", [1500, 1500, 1500, 1500]), ("3324", "雙鴻", [500, 500, 500, 500]),
-            ("2308", "台達電", [5000, 5200, 5500, 4500]), ("2382", "廣達", [4000, 4000, 3000, 2000]),
-            ("3034", "聯詠", [1000, 1000, 800, 500]), ("2603", "長榮", [5000, 4000, 3000, 2000]),
-            ("3661", "世芯-KY", [400, 400, 400, 200])
+            ("2330", "台積電", [8000, 8000, 8000, 8000]), ("2454", "聯發科", [1500, 1500, 1500, 1500])
         ]
         dummy_rows = []
         for ticker, name, shares in mock_scenarios:
@@ -682,9 +584,8 @@ def analyze_manager_moves(df):
         })
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# === 側邊欄與大盤風向球 ===
+# === UI 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 阿綜軍規操盤台")
-
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
 tw_c, tw_m20, tw_status = get_market_breadth()
@@ -695,14 +596,9 @@ if tw_c is not None:
 else:
     st.sidebar.warning(tw_status)
 
-# 呼叫美股連動大腦 & ADR 神算
 us_market_brain()
 adr_premium_calculator()
-
-# 呼叫語音早報
 ai_voice_report(tw_status if tw_status else "系統連線中")
-
-# 呼叫 Line 警報擴充槽
 line_notify_setting()
 
 st.sidebar.markdown("---")
@@ -714,7 +610,6 @@ if main_page == "🎯 股神六星雷達系統":
     u_input = st.sidebar.text_area("代號庫 (支援完整112檔)：", value=def_tickers, height=150)
     s_list = [t.strip() for t in u_input.replace('，',',').split(',') if t.strip()]
 
-# 系統維護區
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ 系統維護")
 if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_width=True):
@@ -723,39 +618,46 @@ if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_wid
     time.sleep(1)
     st.rerun()
 
-view_count = get_and_increment_view_count()
-st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
+st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{get_and_increment_view_count()}` 次")
 
 # ==========================================
 # 分頁 1: 🎯 股神六星雷達系統
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：阿綜大滿配軍規版")
+    
+    # --- Top 15 排行榜區塊 ---
+    st.subheader("🔥 全市場成交值 Top 15 (金流觀測)")
+    tse_top, otc_top = fetch_top15_ranking()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("🏆 上市成交值排行 (TWSE)")
+        if not tse_top.empty:
+            st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+        else: st.warning("上市數據獲取失敗")
+    with col2:
+        st.caption("🏆 上櫃成交值排行 (TPEX)")
+        if not otc_top.empty:
+            st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+        else: st.warning("上櫃數據獲取失敗")
+    st.divider()
+
+    # --- 五大核心分頁 ---
     t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達掃描", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
-        st.info("""
-        💡 **【系統操盤核心心法】**
-        1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
-        2. **一眼定多空**：底底高、頭頭高就是多頭；只做多頭排列的股票，空頭連看都不要看！
-        3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
-        4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。
-        """)
+        st.info("💡 **【系統操盤核心心法】**\n1. **拒絕預測**：看懂當下架構。\n2. **一眼定多空**：只做多頭排列。\n3. **保護傘與紀律**：均線是保護傘，跌破關鍵支撐嚴格停損。\n4. **無情操盤**：不摸底、不猜頭。")
         
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids()
+            hot_list = set(tse_top['證券代號'].tolist() + otc_top['證券代號'].tolist()) if not tse_top.empty else set()
             
-            if not inst_map or not hot_list:
-                st.warning("⚠️ 警告：無法從台灣證交所取得大戶與熱門資料 (可能 IP 遭封鎖)，將進行無籌碼掃描！")
-                
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    if i % 5 == 0 or i == len(s_list) - 1:
-                        pb.progress((i+1)/len(s_list))
+                    pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
             if res:
                 df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
@@ -763,27 +665,14 @@ if main_page == "🎯 股神六星雷達系統":
                 
                 def highlight_tags(val):
                     if isinstance(val, str):
-                        if '風險' in val or '警戒' in val or '隔日沖' in val or '🚨' in val or '🪤' in val: 
-                            return 'color: #ff4b4b; font-weight: bold'
-                        elif '安全' in val: 
-                            return 'color: #00cc96'
-                        elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val or '👑' in val:
-                            return 'color: #ffd166; font-weight: bold'
+                        if '風險' in val or '警戒' in val or '隔日沖' in val or '🚨' in val or '🪤' in val: return 'color: #ff4b4b; font-weight: bold'
+                        elif '安全' in val: return 'color: #00cc96'
+                        elif '🔥' in val or '🔴' in val or '多頭' in val or '爆量' in val or '金叉' in val or '強勢' in val or '新高' in val or '👑' in val: return 'color: #ffd166; font-weight: bold'
                     return ''
                     
-                styled_df = display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件'])
-                
-                st.dataframe(
-                    styled_df, 
-                    use_container_width=True,
-                    hide_index=True,
-                    height=580,
-                    column_config={
-                        "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
-                    }
-                )
+                st.dataframe(display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件']), use_container_width=True, hide_index=True, column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")})
             else:
-                st.warning("目前沒有符合量能條件的標的，或是受到 API 流量限制 (Rate Limit) 影響，請稍後再試。")
+                st.warning("目前沒有符合條件的標的，請檢查網路連線。")
 
     with t2:
         st.markdown("### 📈 VPVR 籌碼透視 X 光機")
@@ -791,13 +680,13 @@ if main_page == "🎯 股神六星雷達系統":
         with col_t2_1:
             vpvr_id = st.text_input("🔍 欲透視的股票代號", value="3034", key="vpvr_in")
         with col_t2_2:
-            vpvr_cost = st.number_input("💰 標示您的成本防護線 (輸入 0 則不顯示)", value=431.0, step=1.0)
+            vpvr_cost = st.number_input("💰 標示阿綜的成本防護線 (輸入 0 則不顯示)", value=431.0, step=1.0)
             
         if st.button("📈 繪製 VPVR 籌碼透視圖", use_container_width=True):
             plot_advanced_chart_with_vpvr(vpvr_id, vpvr_cost)
 
     with t3:
-        st.markdown("### 🛡️ 智能部位計算機與紀律診斷")
+        st.markdown("### 🛡️ 智能部位計算機與波段護城河")
         col_diag, col_calc = st.columns([1, 1])
         with col_diag:
             d_id = st.text_input("🔍 欲買進標的代號", value="2317", key="diag_in")
@@ -810,83 +699,55 @@ if main_page == "🎯 股神六星雷達系統":
             if r:
                 st.markdown(f"### 🎯 {r['標的']} 戰情室")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("即時價", r['收盤']); c2.metric("5日線", r['MA5'])
-                c3.metric("月線 (防守點)", r['MA20']); c4.metric("KD狀態", r['KD'])
-                
-                price = r['收盤']
-                stop_loss = r['MA20']
-                v5_avg = r['5日均量']
-                
-                if price <= stop_loss:
-                    st.error("⚠️ **目前股價已低於月線，趨勢轉弱，強烈建議不要買進！**")
+                c1.metric("即時價", r['收盤']); c2.metric("5日線", r['MA5']); c3.metric("月線 (防守點)", r['MA20']); c4.metric("KD狀態", r['KD'])
+                price = r['收盤']; stop_loss = r['MA20']; v5_avg = r['5日均量']
+                if price <= stop_loss: st.error("⚠️ **目前股價已低於月線，趨勢轉弱，強烈建議不要買進！**")
                 else:
                     risk_per_share = price - stop_loss
                     max_loss_amount = capital * (risk_pct / 100)
                     suggested_shares = max_loss_amount / (risk_per_share * 1000)
-                    
                     st.success(f"**趨勢狀況：** {r['狀況']}")
-                    st.info(f"""
-                    #### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**
-                    * **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。
-                    * **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。
-                    """)
-                    if suggested_shares > (v5_avg * 0.01):
-                        st.error(f"💧 **流動性滑價警告**：大資金進出將產生滑價，建議降低部位或分批建倉！")
-            else:
-                st.error("診斷失敗：無法取得足夠的歷史資料。")
+                    st.info(f"#### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**\n* **操作紀律**：跌破月線 ({stop_loss}) 請無條件停損。\n* **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元**。")
+                    if suggested_shares > (v5_avg * 0.01): st.error(f"💧 **流動性滑價警告**：大資金進出將產生滑價，建議分批建倉！")
+            else: st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
         st.markdown("### 🏰 阿綜專屬：持股波段護城河監控")
-        st.info("自動抓取近期「最大量紅 K 棒」的中線作為強勢防守點，並計算您的帳面獲利保護傘。")
-        
         c_moat1, c_moat2 = st.columns(2)
-        with c_moat1:
-            moat_id = st.text_input("🛡️ 持股代號", value="3034", key="moat_in")
-        with c_moat2:
-            cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0, key="moat_cost")
+        with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="3034", key="moat_in")
+        with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0, key="moat_cost")
             
         if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
             moat_data = analyze_dynamic_moat(moat_id, cost_p)
             if moat_data:
-                current = moat_data['current_price']
-                support = moat_data['support_price']
-                cost = moat_data['cost_price']
+                current, support, cost = moat_data['current_price'], moat_data['support_price'], moat_data['cost_price']
                 profit_pct = ((current - cost) / cost) * 100 if cost > 0 else 0
-                
                 st.markdown(f"#### 📊 {moat_id} 防護網狀態")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("目前股價", f"{current} 元")
                 m2.metric("關鍵紅K中線防禦", f"{support} 元", delta=f"基準日: {moat_data['key_date']}", delta_color="off")
                 m3.metric("您的帳面獲利", f"{profit_pct:.1f} %", delta=f"成本 {cost} 元")
-                
-                if current >= support:
-                    st.success(f"🎉 **狀態極佳！** 股價穩踩在帶量長紅 K ({moat_data['key_date']}) 的中線 **{support} 元** 之上，多頭格局強勢，安心續抱！")
-                else:
-                    st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線 **{support} 元**，請留意是否需要分批拔檔。")
-            else:
-                st.error("無法取得該檔股票資料，請確認代號是否正確。")
+                if current >= support: st.success(f"🎉 **狀態極佳！** 股價穩踩在紅 K 中線之上，安心續抱！")
+                else: st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線，請留意拔檔。")
 
     with t4:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
         if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
             inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids()
+            hot_list = set(tse_top['證券代號'].tolist() + otc_top['證券代號'].tolist()) if not tse_top.empty else set()
             danger_list = []
             pb = st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
-                    if i % 5 == 0 or i == len(s_list) - 1:
-                        pb.progress((i+1)/len(s_list))
+                    pb.progress((i+1)/len(s_list))
                     res = f.result()
-                    if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']):
-                        danger_list.append(res)
+                    if res and ("處置" in res['處置與籌碼風險'] or "隔日沖" in res['處置與籌碼風險']): danger_list.append(res)
             if danger_list:
                 df_danger = pd.DataFrame(danger_list)
                 st.error(f"🚨 **發現 {len(df_danger)} 檔高風險標的！請避免追高！**")
                 st.dataframe(df_danger[['標的', '看盤連結', '收盤', '處置與籌碼風險', '觸發條件']], use_container_width=True, column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")})
-            else:
-                st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
+            else: st.success("✅ 目前自選庫中沒有面臨風險的過熱標的。")
 
     with t5:
         st.markdown("### 🧪 策略回測實驗室 (2年期)")
@@ -901,11 +762,10 @@ if main_page == "🎯 股神六星雷達系統":
                 fig = px.line(df_bt, x=df_bt.index, y='Equity', title=f"{bt_id} 波段策略權益曲線 (起點為100)")
                 fig.update_layout(template="plotly_dark")
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("資料不足，無法回測。")
+            else: st.warning("資料不足，無法回測。")
 
 # ==========================================
-# 分頁 2: 🏢 基本面與 AI 診斷 (獨立大分頁)
+# 分頁 2: 🏢 基本面與 AI 診斷
 # ==========================================
 elif main_page == "🏢 基本面與 AI 診斷":
     st.title("🏢 基本面濾網與 AI 財報新聞分析")
@@ -935,9 +795,10 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     analyzed_df = analyze_manager_moves(raw_df)
     
     if not analyzed_df.empty:
-        with st.spinner("⚡ 正在獲取最新股價、計算主力成本與持股權重，並進行風險判定..."):
+        with st.spinner("⚡ 正在計算主力成本與風險..."):
             inst_map = get_inst_data()
-            hot_list = get_hot_rank_ids()
+            tse, otc = fetch_top15_ranking()
+            hot_list = set(tse['證券代號'].tolist() + otc['證券代號'].tolist()) if not tse.empty else set()
             star_dict, price_dict, vwap_dict, warning_dict = {}, {}, {}, {}
             
             with ThreadPoolExecutor(max_workers=8) as ex:
@@ -955,10 +816,8 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                         warning_dict[t] = "✅ 安全"
             
             for _, row in analyzed_df.iterrows():
-                if row['動向狀態'] == "🟢 主力連買":
-                    vwap_dict[row['代號']] = estimate_vwap(row['代號'], row['連續天數'])
-                else:
-                    vwap_dict[row['代號']] = None
+                if row['動向狀態'] == "🟢 主力連買": vwap_dict[row['代號']] = estimate_vwap(row['代號'], row['連續天數'])
+                else: vwap_dict[row['代號']] = None
             
             analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))
             analyzed_df.insert(3, '主力推估成本', analyzed_df['代號'].map(vwap_dict))
@@ -970,25 +829,15 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             analyzed_df['市值預估'] = analyzed_df['最新持股張數'] * analyzed_df['最新收盤價_num'] * 1000
             total_assets = analyzed_df['市值預估'].sum()
             
-            if not analyzed_df.empty and "測試" in str(analyzed_df['股票名稱'].iloc[0]):
-                total_assets = total_assets * 3
+            if not analyzed_df.empty and "測試" in str(analyzed_df['股票名稱'].iloc[0]): total_assets = total_assets * 3
 
             def calc_weight_and_space(row):
-                if total_assets > 0:
-                    weight = (row['市值預估'] / total_assets) * 100
-                else:
-                    weight = 0.0
-                
+                weight = (row['市值預估'] / total_assets) * 100 if total_assets > 0 else 0.0
                 limit = 25.0 if str(row['代號']) == "2330" else 10.0
                 space = limit - weight
-                
-                if space <= 0.5:
-                    status = f"🛑 滿水位 (剩 {max(0, space):.1f}%)"
-                elif space <= 2.0:
-                    status = f"⚠️ 快滿 (剩 {space:.1f}%)"
-                else:
-                    status = f"✅ 充足 (剩 {space:.1f}%)"
-                    
+                if space <= 0.5: status = f"🛑 滿水位 (剩 {max(0, space):.1f}%)"
+                elif space <= 2.0: status = f"⚠️ 快滿 (剩 {space:.1f}%)"
+                else: status = f"✅ 充足 (剩 {space:.1f}%)"
                 return pd.Series([round(weight, 2), status])
 
             analyzed_df[['預估權重(%)', '加碼空間']] = analyzed_df.apply(calc_weight_and_space, axis=1)
@@ -998,18 +847,13 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             heat_df = analyzed_df[analyzed_df['今日買賣超(張)'] != 0].copy()
             if not heat_df.empty:
                 fig = px.treemap(
-                    heat_df, 
-                    path=[px.Constant("全市場動向"), '產業族群', '股票名稱'],
-                    values=heat_df['今日買賣超(張)'].abs(),
-                    color='今日買賣超(張)', 
-                    color_continuous_scale=['#00cc96', '#262730', '#ff4b4b'], 
-                    color_continuous_midpoint=0,
-                    title="板塊面積大小代表張數，紅色代表買進，綠色代表賣出 (台股慣例)"
+                    heat_df, path=[px.Constant("全市場動向"), '產業族群', '股票名稱'], values=heat_df['今日買賣超(張)'].abs(),
+                    color='今日買賣超(張)', color_continuous_scale=['#00cc96', '#262730', '#ff4b4b'], color_continuous_midpoint=0,
+                    title="板塊面積大小代表張數，紅色代表買進，綠色代表賣出"
                 )
                 fig.update_traces(textinfo="label+value")
                 st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"熱力圖生成失敗: {e}")
+        except Exception: st.error("熱力圖生成失敗")
 
         st.divider()
         st.subheader("📊 盤面戰情總覽")
@@ -1022,36 +866,22 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         m1.metric("🔥 主力連買標的", f"{buy_count} 檔")
         m2.metric("🧊 經理人倒貨標的", f"{sell_count} 檔")
         m3.metric("⭐ 雙引擎共振標的", f"{star_count} 檔")
-        m4.metric("🚨 處置/隔日沖警戒", f"{danger_count} 檔", help="即將面臨處置或有隔日沖砸盤風險！")
+        m4.metric("🚨 處置/隔日沖警戒", f"{danger_count} 檔")
         
         st.divider()
         st.subheader("🔥 經理人持股 × 成本防護 × 雙引擎共振榜")
-        
-        display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估'])
-        display_df = display_df.rename(columns={'連續天數顯示': '連續天數'})
+        display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估']).rename(columns={'連續天數顯示': '連續天數'})
         
         def highlight_danger(val):
-            if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val or '滿水位' in val): 
-                return 'color: #ff4b4b; font-weight: bold'
-            elif isinstance(val, str) and ('安全' in val or '充足' in val): 
-                return 'color: #00cc96'
-            elif isinstance(val, str) and '快滿' in val:
-                return 'color: #ffd166; font-weight: bold'
+            if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val or '滿水位' in val): return 'color: #ff4b4b; font-weight: bold'
+            elif isinstance(val, str) and ('安全' in val or '充足' in val): return 'color: #00cc96'
+            elif isinstance(val, str) and '快滿' in val: return 'color: #ffd166; font-weight: bold'
             return ''
             
-        styled_df = display_df.style.map(highlight_danger, subset=['處置與風險', '加碼空間'])
-        
         st.dataframe(
-            styled_df,
-            use_container_width=True,
-            hide_index=True,
-            height=580, 
-            column_config={
-                "今日買賣超(張)": st.column_config.NumberColumn("今日買賣超(張)", format="%d"),
-                "最新持股張數": st.column_config.NumberColumn("最新持股張數", format="%d"),
-                "預估權重(%)": st.column_config.NumberColumn("預估權重(%)", format="%.2f %%"),
-                "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
-            }
+            display_df.style.map(highlight_danger, subset=['處置與風險', '加碼空間']),
+            use_container_width=True, hide_index=True, height=580, 
+            column_config={"今日買賣超(張)": st.column_config.NumberColumn("今日買賣超(張)", format="%d"), "最新持股張數": st.column_config.NumberColumn("最新持股張數", format="%d"), "預估權重(%)": st.column_config.NumberColumn("預估權重(%)", format="%.2f %%"), "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")}
         )
     else:
         st.warning("目前尚未收集到足夠的歷史資料，或今日 API 獲取失敗，請稍後再試。")

@@ -169,7 +169,6 @@ def line_notify_setting():
 def fetch_top15_ranking():
     tse_df, otc_df = pd.DataFrame(), pd.DataFrame()
     
-    # 解析上市 JSON 的內部函數
     def parse_tse(res):
         if res and 'tables' in res:
             for tb in res['tables']:
@@ -179,7 +178,6 @@ def fetch_top15_ranking():
                     return df.sort_values('v', ascending=False).head(15)[['證券代號','證券名稱','收盤價','v']]
         return pd.DataFrame()
 
-    # 解析上櫃 JSON 的內部函數
     def parse_otc(res):
         if res and 'aaData' in res and len(res['aaData']) > 0:
             df = pd.DataFrame(res['aaData'])
@@ -189,7 +187,7 @@ def fetch_top15_ranking():
             return res_df
         return pd.DataFrame()
 
-    # 1. 上市 (先抓預設最新，若失敗則回溯 7 天)
+    # 1. 上市
     res_tse = safe_get_json("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", HEADERS)
     tse_df = parse_tse(res_tse)
     if tse_df.empty:
@@ -200,7 +198,7 @@ def fetch_top15_ranking():
             tse_df = parse_tse(res)
             if not tse_df.empty: break
 
-    # 2. 上櫃 (先抓預設最新，若失敗則回溯 7 天)
+    # 2. 上櫃
     res_otc = safe_get_json("https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&o=json", HEADERS)
     otc_df = parse_otc(res_otc)
     if otc_df.empty:
@@ -650,30 +648,36 @@ if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_wid
 st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{get_and_increment_view_count()}` 次")
 
 # ==========================================
-# 分頁 1: 🎯 股神六星雷達系統
+# 分頁 1: 🎯 股神六星雷達系統 (包含 6 個子分頁)
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：阿綜大滿配軍規版")
     
-    # --- Top 15 排行榜區塊 ---
-    st.subheader("🔥 全市場成交值 Top 15 (金流觀測)")
-    tse_top, otc_top = fetch_top15_ranking()
-    col1, col2 = st.columns(2)
-    with col1:
-        st.caption("🏆 上市成交值排行 (TWSE)")
-        if not tse_top.empty:
-            st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-        else: st.warning("上市數據獲取失敗，請檢查 API 連線。")
-    with col2:
-        st.caption("🏆 上櫃成交值排行 (TPEX)")
-        if not otc_top.empty:
-            st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-        else: st.warning("上櫃數據獲取失敗，請檢查 API 連線。")
-    st.divider()
-
-    # --- 五大核心分頁 ---
-    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達掃描", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
+    # --- 6 個核心分頁 ---
+    t_top, t1, t2, t3, t4, t5 = st.tabs([
+        "🔥 金流 Top 15", 
+        "🎯 六星雷達掃描", 
+        "📈 VPVR 進階圖", 
+        "🛡️ 智能部位診斷", 
+        "🚨 處置與隔日沖", 
+        "🧪 回測實驗室"
+    ])
     
+    with t_top:
+        st.markdown("### 🔥 全市場成交值 Top 15 (金流觀測)")
+        tse_top, otc_top = fetch_top15_ranking()
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption("🏆 上市成交值排行 (TWSE)")
+            if not tse_top.empty:
+                st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+            else: st.warning("上市數據獲取失敗，請檢查 API 連線。")
+        with col2:
+            st.caption("🏆 上櫃成交值排行 (TPEX)")
+            if not otc_top.empty:
+                st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
+            else: st.warning("上櫃數據獲取失敗，請檢查 API 連線。")
+
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
         st.info("""

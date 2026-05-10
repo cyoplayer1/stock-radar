@@ -129,7 +129,7 @@ def adr_premium_calculator():
         st.sidebar.warning("API 冷卻中，無法計算 ADR 溢價。")
 
 # === 🌟 模組 B：AI 語音操盤秘書 (阿綜專屬) ===
-def ai_voice_report(market_status):
+def ai_voice_report(market_status, stock_id="3034 聯詠"):
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎙️ AI 語音早報")
     
@@ -137,7 +137,7 @@ def ai_voice_report(market_status):
         with st.spinner("阿綜專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now().strftime("%Y年%m月%d日")
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
-            report_text = f"阿綜早安，今天是{now}。大盤狀態：{status_text}。排行榜與籌碼數據已更新，祝您修車與操作順利，獲利翻倍！"
+            report_text = f"阿綜早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據與成交排行榜已更新。請透過 VPVR 圖表確認持股是否踩在關鍵紅K支撐之上，祝您修車與操作順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -164,40 +164,63 @@ def line_notify_setting():
         else:
             st.sidebar.warning("請先輸入 Token！")
 
-# === 🌟 模組 D：成交值 Top 15 自動回溯抓取 ===
+# === 🌟 模組 D：Top 15 成交值排行榜 (雙層回溯無死角版) ===
 @st.cache_data(ttl=3600)
 def fetch_top15_ranking():
     tse_df, otc_df = pd.DataFrame(), pd.DataFrame()
-    today = datetime.datetime.now()
-    dates = [(today - datetime.timedelta(days=i)).strftime('%Y%m%d') for i in range(5)]
     
-    # 上市
-    for d_str in dates:
-        url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={d_str}&type=ALLBUT0999"
-        res = safe_get_json(url, HEADERS)
+    # 解析上市 JSON 的內部函數
+    def parse_tse(res):
         if res and 'tables' in res:
             for tb in res['tables']:
                 if '成交金額' in tb.get('fields', []):
                     df = pd.DataFrame(tb['data'], columns=tb['fields'])
                     df['v'] = pd.to_numeric(df['成交金額'].str.replace(',',''), errors='coerce')
-                    tse_df = df.sort_values('v', ascending=False).head(15)[['證券代號','證券名稱','收盤價','v']]
-                    break
-        if not tse_df.empty: break
+                    return df.sort_values('v', ascending=False).head(15)[['證券代號','證券名稱','收盤價','v']]
+        return pd.DataFrame()
 
-    # 上櫃
-    for d_str in dates:
-        tw_y = int(d_str[:4]) - 1911
-        otc_d = f"{tw_y}/{d_str[4:6]}/{d_str[6:]}"
-        url = f"https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&d={otc_d}&o=json"
-        res = safe_get_json(url, HEADERS)
+    # 解析上櫃 JSON 的內部函數
+    def parse_otc(res):
         if res and 'aaData' in res and len(res['aaData']) > 0:
             df = pd.DataFrame(res['aaData'])
             df['v'] = pd.to_numeric(df[9].astype(str).str.replace(',',''), errors='coerce')
-            otc_df = df.sort_values('v', ascending=False).head(15)[[0, 1, 2, 'v']]
-            otc_df.columns = ['證券代號','證券名稱','收盤價','v']
-            break
+            res_df = df.sort_values('v', ascending=False).head(15)[[0, 1, 2, 'v']]
+            res_df.columns = ['證券代號','證券名稱','收盤價','v']
+            return res_df
+        return pd.DataFrame()
+
+    # 1. 上市 (先抓預設最新，若失敗則回溯 7 天)
+    res_tse = safe_get_json("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", HEADERS)
+    tse_df = parse_tse(res_tse)
+    if tse_df.empty:
+        today = datetime.datetime.now()
+        for i in range(7):
+            d_str = (today - datetime.timedelta(days=i)).strftime('%Y%m%d')
+            res = safe_get_json(f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={d_str}&type=ALLBUT0999", HEADERS)
+            tse_df = parse_tse(res)
+            if not tse_df.empty: break
+
+    # 2. 上櫃 (先抓預設最新，若失敗則回溯 7 天)
+    res_otc = safe_get_json("https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&o=json", HEADERS)
+    otc_df = parse_otc(res_otc)
+    if otc_df.empty:
+        today = datetime.datetime.now()
+        for i in range(7):
+            tw_y = today.year - 1911
+            d_str = (today - datetime.timedelta(days=i)).strftime(f'{tw_y}/%m/%d')
+            res = safe_get_json(f"https://www.tpex.org.tw/web/stock/aftertrading/otc_quotes_no1430/otc_quotes_no1430_result.php?l=zh-tw&d={d_str}&o=json", HEADERS)
+            otc_df = parse_otc(res)
+            if not otc_df.empty: break
             
     return tse_df, otc_df
+
+@st.cache_data(ttl=300)
+def get_hot_rank_ids():
+    tse_df, otc_df = fetch_top15_ranking()
+    hot_ids = set()
+    if not tse_df.empty: hot_ids.update(tse_df['證券代號'].tolist())
+    if not otc_df.empty: hot_ids.update(otc_df['證券代號'].tolist())
+    return hot_ids
 
 # === 基礎指標與爬蟲函數 ===
 def calculate_kd(df):
@@ -456,7 +479,10 @@ def diagnose_holding(ticker_in):
     try:
         clean = ticker_in.replace('.TW','').replace('.TWO','')
         tid = clean + ".TW"; df = yf.Ticker(tid).history(period="6mo")
-        if df.empty: df = yf.Ticker(clean + ".TWO").history(period="6mo")
+        df.dropna(subset=['Close'], inplace=True)
+        if df.empty:
+            tid = clean + ".TWO"; df = yf.Ticker(tid).history(period="6mo")
+            df.dropna(subset=['Close'], inplace=True)
         if df.empty or len(df) < 30: return None
         fc, _ = get_fugle_realtime(clean)
         if fc: df.iloc[-1, df.columns.get_loc('Close')] = fc
@@ -515,7 +541,10 @@ def fetch_today_holdings_from_api(etf_code="00981A"):
     res = safe_get_json(url_twse, HEADERS)
     if res and 'data' in res and len(res['data']) > 0:
         for row in res['data']:
-            new_data.append([today, str(row[0]).strip(), str(row[1]).strip(), int(row[2].replace(',', '')) // 1000])
+            ticker = str(row[0]).strip()
+            name = str(row[1]).strip()
+            shares = int(row[2].replace(',', '')) // 1000 
+            new_data.append([today, ticker, name, shares])
     return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
 
 def get_00981a_holdings_history(force_refresh=False):
@@ -634,12 +663,12 @@ if main_page == "🎯 股神六星雷達系統":
         st.caption("🏆 上市成交值排行 (TWSE)")
         if not tse_top.empty:
             st.dataframe(tse_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-        else: st.warning("上市數據獲取失敗")
+        else: st.warning("上市數據獲取失敗，請檢查 API 連線。")
     with col2:
         st.caption("🏆 上櫃成交值排行 (TPEX)")
         if not otc_top.empty:
             st.dataframe(otc_top.rename(columns={'v':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-        else: st.warning("上櫃數據獲取失敗")
+        else: st.warning("上櫃數據獲取失敗，請檢查 API 連線。")
     st.divider()
 
     # --- 五大核心分頁 ---
@@ -647,15 +676,24 @@ if main_page == "🎯 股神六星雷達系統":
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")
-        st.info("💡 **【系統操盤核心心法】**\n1. **拒絕預測**：看懂當下架構。\n2. **一眼定多空**：只做多頭排列。\n3. **保護傘與紀律**：均線是保護傘，跌破關鍵支撐嚴格停損。\n4. **無情操盤**：不摸底、不猜頭。")
+        st.info("""
+        💡 **【系統操盤核心心法】**
+        1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
+        2. **一眼定多空**：底底高、頭頭高就是多頭；只做多頭排列的股票，空頭連看都不要看！
+        3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
+        4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。
+        """)
         
         if st.button("🚀 啟動即時掃描 (全自動共振分析)", use_container_width=True):
             inst_map = get_inst_data()
-            hot_list = set(tse_top['證券代號'].tolist() + otc_top['證券代號'].tolist()) if not tse_top.empty else set()
+            hot_ids = get_hot_rank_ids()
             
+            if not inst_map or not hot_ids:
+                st.warning("⚠️ 警告：無法從台灣證交所取得完整資料 (可能 IP 遭封鎖)，將進行無籌碼掃描！")
+                
             res, pb = [], st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
+                futs = [ex.submit(analyze_stock_score, t, inst_map, hot_ids) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     if f.result(): res.append(f.result())
@@ -707,8 +745,8 @@ if main_page == "🎯 股神六星雷達系統":
                     max_loss_amount = capital * (risk_pct / 100)
                     suggested_shares = max_loss_amount / (risk_per_share * 1000)
                     st.success(f"**趨勢狀況：** {r['狀況']}")
-                    st.info(f"#### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**\n* **操作紀律**：跌破月線 ({stop_loss}) 請無條件停損。\n* **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元**。")
-                    if suggested_shares > (v5_avg * 0.01): st.error(f"💧 **流動性滑價警告**：大資金進出將產生滑價，建議分批建倉！")
+                    st.info(f"#### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**\n* **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。\n* **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。")
+                    if suggested_shares > (v5_avg * 0.01): st.error(f"💧 **流動性滑價警告**：大資金進出將產生滑價，建議降低部位或分批建倉！")
             else: st.error("診斷失敗：無法取得足夠的歷史資料。")
 
         st.markdown("---")
@@ -727,18 +765,20 @@ if main_page == "🎯 股神六星雷達系統":
                 m1.metric("目前股價", f"{current} 元")
                 m2.metric("關鍵紅K中線防禦", f"{support} 元", delta=f"基準日: {moat_data['key_date']}", delta_color="off")
                 m3.metric("您的帳面獲利", f"{profit_pct:.1f} %", delta=f"成本 {cost} 元")
-                if current >= support: st.success(f"🎉 **狀態極佳！** 股價穩踩在紅 K 中線之上，安心續抱！")
-                else: st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線，請留意拔檔。")
+                if current >= support: st.success(f"🎉 **狀態極佳！** 股價穩踩在帶量長紅 K ({moat_data['key_date']}) 的中線 **{support} 元** 之上，多頭格局強勢，安心續抱！")
+                else: st.warning(f"⚠️ **防守警戒！** 股價已跌破近期最大量紅 K 中線 **{support} 元**，請留意是否需要分批拔檔。")
+            else:
+                st.error("無法取得該檔股票資料，請確認代號是否正確。")
 
     with t4:
         st.markdown("### 🚨 處置與隔日沖警戒清單 (多頭陷阱迴避)")
         if st.button("⚠️ 掃描全市場過熱標的", use_container_width=True):
             inst_map = get_inst_data()
-            hot_list = set(tse_top['證券代號'].tolist() + otc_top['證券代號'].tolist()) if not tse_top.empty else set()
+            hot_ids = get_hot_rank_ids()
             danger_list = []
             pb = st.progress(0)
             with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = [ex.submit(analyze_stock_score, t, inst_map, hot_list) for t in s_list]
+                futs = [ex.submit(analyze_stock_score, t, inst_map, hot_ids) for t in s_list]
                 for i, f in enumerate(as_completed(futs)):
                     pb.progress((i+1)/len(s_list))
                     res = f.result()
@@ -795,14 +835,13 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     analyzed_df = analyze_manager_moves(raw_df)
     
     if not analyzed_df.empty:
-        with st.spinner("⚡ 正在計算主力成本與風險..."):
+        with st.spinner("⚡ 正在獲取最新股價、計算主力成本與持股權重，並進行風險判定..."):
             inst_map = get_inst_data()
-            tse, otc = fetch_top15_ranking()
-            hot_list = set(tse['證券代號'].tolist() + otc['證券代號'].tolist()) if not tse.empty else set()
+            hot_ids = get_hot_rank_ids()
             star_dict, price_dict, vwap_dict, warning_dict = {}, {}, {}, {}
             
             with ThreadPoolExecutor(max_workers=8) as ex:
-                futs = {ex.submit(analyze_stock_score, str(row['代號']), inst_map, hot_list): row['代號'] for _, row in analyzed_df.iterrows()}
+                futs = {ex.submit(analyze_stock_score, str(row['代號']), inst_map, hot_ids): row['代號'] for _, row in analyzed_df.iterrows()}
                 for f in as_completed(futs):
                     t = futs[f]
                     res = f.result()

@@ -54,16 +54,12 @@ def get_and_increment_view_count():
 def safe_get_json(url, headers, max_retries=3):
     for attempt in range(max_retries):
         try:
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
-            response.raise_for_status() 
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            if response.status_code in [403, 429]: time.sleep(3)
-            else: time.sleep(1)
-        except (ChunkedEncodingError, ConnectionError, ReadTimeout) as e:
-            time.sleep(2)
-        except Exception as e:
-            break
+            response = requests.get(url, headers=headers, timeout=10, verify=False)
+            if response.status_code == 200:
+                return response.json()
+            time.sleep(1)
+        except Exception:
+            time.sleep(1)
     return {}
 
 # === 4. 核心指標與大盤風向球 ===
@@ -72,7 +68,7 @@ def get_market_breadth():
     try:
         df = yf.Ticker("^TWII").history(period="1mo")
         if df.empty:
-            return None, None, "🟡 資料連線不穩 (請稍後重試或檢查網路)"
+            return None, None, "🟡 資料連線不穩 (請稍後重試)"
 
         df['MA20'] = df['Close'].rolling(20).mean()
         curr_p = df['Close'].iloc[-1]
@@ -80,7 +76,7 @@ def get_market_breadth():
         
         status = "🟢 偏多順風 (站上月線)" if curr_p > ma20 else "🔴 偏空逆風 (跌破月線)"
         return round(curr_p, 2), round(ma20, 2), status
-    except Exception as e:
+    except Exception:
         return None, None, "❌ 連線遭拒 (Yahoo API 阻擋)"
 
 # === 🌟 模組 A1：美股大腦 (垂直排版) ===
@@ -109,8 +105,6 @@ def us_market_brain():
                  st.sidebar.metric(label=name, value="N/A", delta="-")
         except Exception:
             st.sidebar.metric(label=name, value="Error", delta="-")
-            
-    st.sidebar.caption("💡 提示：若 ARM/TSM 同步大漲，留意台股連動跳空。")
 
 # === 🌟 模組 A2：ADR 溢價神算 ===
 def adr_premium_calculator():
@@ -150,7 +144,7 @@ def ai_voice_report(market_status, stock_id="3034 聯詠"):
                 tts.write_to_fp(audio_fp)
                 st.sidebar.audio(audio_fp, format='audio/mp3')
                 st.sidebar.success("✅ 早報已生成，請點擊上方播放！")
-            except Exception as e:
+            except Exception:
                 st.sidebar.error("語音生成失敗，請確認已安裝 gTTS 套件。")
 
 # === 🌟 模組 C：Line Notify 警報擴充槽 ===
@@ -306,6 +300,7 @@ def advanced_ai_sentiment(news_list, symbol):
     """
     return report
 
+# === 🌟 籌碼與假日回溯排行 ===
 @st.cache_data(ttl=3600)
 def get_inst_data():
     inst_map = {}
@@ -322,12 +317,10 @@ def get_inst_data():
     if not inst_map: st.cache_data.clear()
     return inst_map
 
-# === 🌟 假日自動回溯排行系統 ===
 @st.cache_data(ttl=300)
 def get_hot_rank_ids():
     hot_ids = set()
     today = datetime.datetime.now()
-    # 建立日期回溯列表 (從今天往回找 5 天，確保避開假日)
     dates_to_try = [(today - datetime.timedelta(days=i)).strftime('%Y%m%d') for i in range(5)]
     
     found_tse = False
@@ -738,7 +731,7 @@ st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{view_count}` 次")
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
     st.title("📡 稀有的股神系統：阿綜大滿配軍規版")
-    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
+    t1, t2, t3, t4, t5 = st.tabs(["🎯 六星雷達掃描", "📈 VPVR 進階圖", "🛡️ 智能部位診斷", "🚨 處置與隔日沖", "🧪 回測實驗室"])
     
     with t1:
         st.markdown("### 🎯 買進策略：共振發動")

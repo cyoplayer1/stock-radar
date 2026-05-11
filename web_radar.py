@@ -723,10 +723,15 @@ if main_page == "🎯 股神六星雷達系統":
                 df_res = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
                 for _, row in df_res.iterrows():
                     st.markdown(f"""
-                    <div style='background-color:#262730; padding:15px; border-radius:10px; margin-bottom:10px;'>
-                        <h4 style='margin:0; color:#ffd166;'>{row['標的']} {row['星等']}</h4>
-                        <p style='margin:5px 0 0 0; font-size:16px;'>收盤：<b>{row['收盤']}</b> | 量能：<b>{row['今日量(張)']}千張</b></p>
-                        <p style='margin:5px 0 0 0; font-size:14px; color:#00cc96;'>條件：{row['觸發條件']}</p>
+                    <div style='background-color:#1E1E1E; padding:15px; border-radius:10px; margin-bottom:12px; border-left: 5px solid #ffd166; box-shadow: 2px 2px 5px rgba(0,0,0,0.5);'>
+                        <h4 style='margin:0; color:#ffd166; font-size:18px;'>{row['標的']} {row['星等']}</h4>
+                        <p style='margin:8px 0 5px 0; font-size:16px; color:#FFFFFF;'>
+                            收盤：<b style='color:#00cc96; font-size:18px;'>{row['收盤']}</b> ｜ 
+                            量能：<b style='color:#00cc96; font-size:18px;'>{row['今日量(張)']}</b> <span style='font-size:14px; color:#CCCCCC;'>千張</span>
+                        </p>
+                        <p style='margin:0; font-size:14px; color:#FFFFFF;'>
+                            條件：<span style='color:#ffd166;'>{row['觸發條件']}</span>
+                        </p>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -751,7 +756,7 @@ if main_page == "🎯 股神六星雷達系統":
             st.markdown("### 🎯 買進策略：共振發動")
             st.info("""
             💡 **【系統操盤核心心法】**
-            1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
+            1. **拒急預測**：不要替股票算命，看懂「當下的架構」最重要。
             2. **一眼定多空**：底底高、頭頭高就是多頭；只做多頭排列的股票，空頭連看都不要看！
             3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
             4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。

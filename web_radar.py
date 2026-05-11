@@ -17,12 +17,6 @@ import xml.etree.ElementTree as ET
 from gtts import gTTS
 import io
 
-# 🧠 匯入 Gemini AI 套件
-try:
-    import google.generativeai as genai
-except ImportError:
-    pass # 若未安裝會在使用該功能時提示
-
 # === 1. 系統環境設定 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -270,6 +264,34 @@ def get_fundamentals_and_news(symbol):
         return eps, pe, rev_growth_str, news
     except: return "---", "---", "---", []
 
+def ai_news_sentiment(news_list):
+    if not news_list:
+        return "⚪ 尚無近期外電或財經新聞可供分析。"
+    
+    pos_words = ['增', '漲', '高', '好', '優', '強', '大單', '受惠', '利多', '新高', '突破', '成長', '看好', '買超', '雙增', '季增']
+    neg_words = ['減', '跌', '低', '壞', '差', '弱', '砍單', '衰退', '利空', '破底', '下修', '看壞', '不如預期', '賣超', '雙減']
+    
+    score = 0
+    formatted_news = []
+    for n in news_list:
+        t = n.get('title', '')
+        l = n.get('link', '#')
+        formatted_news.append(f"- [{t}]({l})")
+        for w in pos_words:
+            if w in t: score += 1
+        for w in neg_words:
+            if w in t: score -= 1
+    
+    if score >= 2:
+        conclusion = "🟢 **【AI 情感判定：偏多】** 近期新聞頻頻釋出利多，市場情緒樂觀，具備消息面保護傘。"
+    elif score <= -2:
+        conclusion = "🔴 **【AI 情感判定：偏空】** 近期新聞出現雜音或利空，請嚴格控管資金與停損。"
+    else:
+        conclusion = "🟡 **【AI 情感判定：中性】** 近期新聞無極端多空方向，請回歸技術面與籌碼面操作。"
+        
+    summary = "\n".join(formatted_news)
+    return f"{conclusion}\n\n**📰 近期熱門新聞標題 (點擊可看原文)：**\n{summary}"
+
 # === 8. 名單字典 (完整 112 檔) ===
 STOCKS_DICT = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電", "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電", "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠", "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺", "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯", "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達", "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉", "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策", "3533.TW": "嘉澤", "3013.TW": "晟銘電", "8210.TW": "勤誠", "7769.TW": "鴻勁", "3037.TW": "欣興", "8046.TW": "南電", "3189.TW": "景碩", "2368.TW": "金像電", "4958.TW": "臻鼎KY", "2313.TW": "華通", "6274.TWO": "台燿", "2383.TW": "台光電", "6213.TW": "聯茂", "3008.TW": "大立光", "3406.TW": "玉晶光", "1519.TW": "華城", "1503.TW": "士電", "1513.TW": "中興電", "1504.TW": "東元", "1605.TW": "華新", "1101.TW": "台泥", "1102.TW": "亞泥", "2002.TW": "中鋼", "2027.TW": "大成鋼", "2014.TW": "中鴻", "2207.TW": "和泰車", "9910.TW": "豐泰", "9921.TW": "巨大", "9904.TW": "寶成", "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易", "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金", "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金", "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金", "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太", "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎", "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息", "00929.TW": "復華科技", "00713.TW": "高息低波", "006208.TW": "富邦台50", "6789.TW": "采鈺", "6147.TWO": "頎邦", "3016.TW": "嘉晶", "6805.TW": "富世達"
@@ -418,6 +440,29 @@ def analyze_dynamic_moat(symbol, cost_price):
         return {"current_price": round(current_price, 2), "support_price": support_price, "key_date": date_str, "cost_price": cost_price}
     except: return None
 
+def run_simple_backtest(symbol):
+    try:
+        tid = f"{symbol}.TW"
+        df = yf.Ticker(tid).history(period="2y")
+        if df.empty:
+            tid = f"{symbol}.TWO"
+            df = yf.Ticker(tid).history(period="2y")
+        if len(df) < 60: return None
+        
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df = df.dropna()
+        
+        df['Signal'] = 0
+        df.loc[df['Close'] > df['MA20'], 'Signal'] = 1
+        df['Return'] = df['Close'].pct_change()
+        df['Strategy_Return'] = df['Signal'].shift(1) * df['Return']
+        df['Equity'] = (1 + df['Strategy_Return'].fillna(0)).cumprod() * 100
+        
+        win_rate = len(df[df['Strategy_Return'] > 0]) / len(df[df['Strategy_Return'] != 0]) if len(df[df['Strategy_Return'] != 0]) > 0 else 0
+        total_return = df['Equity'].iloc[-1] - 100
+        return df, win_rate, total_return
+    except: return None
+
 # === 10. 🕵️‍♂️ 經理人籌碼追蹤邏輯 ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
     today = datetime.datetime.today().strftime('%Y-%m-%d')
@@ -498,13 +543,12 @@ main_page = st.sidebar.radio("跳轉頁面", [
     "🏢 基本面與 AI 診斷", 
     "🕵️‍♂️ 00981A 經理人跟單雷達",
     "☠️ 隔日沖分點照妖鏡",
-    "🧠 真．AI 決策大腦",
     "⚡ 全自動策略優化器"
 ])
 
 mobile_mode = st.sidebar.toggle("📱 啟動極簡戰鬥模式", value=False)
 
-if main_page in ["🎯 股神六星雷達系統", "☠️ 隔日沖分點照妖鏡", "🧠 真．AI 決策大腦", "⚡ 全自動策略優化器"]:
+if main_page in ["🎯 股神六星雷達系統", "☠️ 隔日沖分點照妖鏡", "⚡ 全自動策略優化器"]:
     st.sidebar.subheader("⚙️ 自選股水庫")
     def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
     u_input = st.sidebar.text_area("代號庫：", value=def_tickers, height=150)
@@ -580,7 +624,7 @@ if main_page == "🎯 股神六星雷達系統":
                 if r: st.write(r)
 
 # ==========================================
-# 分頁 2: 🏢 基本面與 AI 診斷 (舊版)
+# 分頁 2: 🏢 基本面與 AI 診斷 (輕量版)
 # ==========================================
 elif main_page == "🏢 基本面與 AI 診斷":
     st.title("🏢 基本面濾網")
@@ -618,52 +662,6 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
             st.metric("隔日沖潛在倒貨量", f"{danger_ratio:.1f} %")
             if danger_ratio > 40: st.error("☠️ 極度危險！明日必有賣壓。")
             st.dataframe(mock_branch_data.style.map(lambda v: 'color: #ff4b4b' if '🚨' in str(v) else '', subset=['大戶屬性']), hide_index=True)
-
-# ==========================================
-# 🚀 渦輪 1: 🧠 真．AI 決策大腦 (Gemini API)
-# ==========================================
-elif main_page == "🧠 真．AI 決策大腦":
-    st.title("🧠 終極 AI 操盤決策引擎 (Gemini 1.5 Pro)")
-    st.markdown("將技術指標、基本面、籌碼面餵給真正的 AI，讓它幫你寫操盤日誌。")
-    
-    gemini_key = st.text_input("🔑 輸入您的 Gemini API Key", type="password")
-    ai_target = st.text_input("🎯 欲分析標的", value="2317")
-    
-    if st.button("🤖 產生無情操盤建議", use_container_width=True):
-        if not gemini_key:
-            st.warning("⚠️ 請先輸入 API Key。")
-        else:
-            try:
-                genai.configure(api_key=gemini_key)
-                model = genai.GenerativeModel('gemini-1.5-pro')
-                
-                with st.spinner("🤖 AI 正在深度思考中... (擷取技術/基本/消息面)"):
-                    # 1. 抓基本資料
-                    eps, pe, rev, news = get_fundamentals_and_news(ai_target)
-                    c_price = fetch_fast_price(ai_target)
-                    
-                    # 2. 構建 Prompt
-                    news_str = "\n".join([n['title'] for n in news])
-                    prompt = f"""
-                    你是一個無情的台股交易員。請根據以下資訊，給出針對 {ai_target} 的直接操盤建議：
-                    - 最新收盤價：{c_price}
-                    - 本益比：{pe}
-                    - 營收 YoY：{rev}
-                    - 近期新聞標題：\n{news_str}
-                    
-                    請用簡短、犀利的語氣，分三點回答：
-                    1. 綜合多空判定 (給出明確方向)
-                    2. 新聞背後的真實意圖分析
-                    3. 操作紀律建議 (防守點)
-                    """
-                    
-                    response = model.generate_content(prompt)
-                    st.success("✅ AI 決策完成！")
-                    st.markdown(f"### 🤖 AI 操盤日誌：{ai_target}")
-                    st.info(response.text)
-                    
-            except Exception as e:
-                st.error(f"❌ AI 呼叫失敗，請確認 API Key 是否正確。錯誤訊息：{e}")
 
 # ==========================================
 # 🚀 渦輪 2: ⚡ 全自動策略優化器 (Grid Search)

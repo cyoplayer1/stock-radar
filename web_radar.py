@@ -365,7 +365,7 @@ STOCKS_DICT = {
     "2303.TW": "聯電", "3711.TW": "日月光", "2408.TW": "南亞科", "2344.TW": "華邦電",
     "2337.TW": "旺宏", "3443.TW": "創意", "3661.TW": "世芯KY", "3034.TW": "聯詠",
     "2379.TW": "瑞昱", "4966.TW": "譜瑞KY", "6415.TW": "矽力KY", "3529.TW": "力旺",
-    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "穩懋", "8299.TWO": "群聯",
+    "6488.TWO": "環球晶", "5483.TWO": "中美晶", "3105.TWO": "稳懋", "8299.TWO": "群聯",
     "2382.TW": "廣達", "3231.TW": "緯創", "6669.TW": "緯穎", "2356.TW": "英業達",
     "2324.TW": "仁寶", "2353.TW": "宏碁", "2357.TW": "華碩", "2376.TW": "技嘉",
     "2377.TW": "微星", "3017.TW": "奇鋐", "3324.TW": "雙鴻", "3653.TW": "健策",
@@ -813,40 +813,68 @@ if main_page == "🎯 股神六星雷達系統":
                     st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
 
         with t_top:
-            st.markdown("### 🔥 全市場成交值 Top 15 與資金熱力圖 (金流觀測)")
-            st.markdown("觀測目前市場資金最集中的板塊，一眼抓出最強勢的主力動向與開盤熱錢流向。")
+            st.markdown("### 🔥 全市場資金流向與類股權重爭霸戰")
+            st.markdown("觀測目前市場資金最集中的「類股族群」，一眼抓出今日開盤最吸金的主流與金流方向。")
             tse_top, otc_top = fetch_top15_ranking()
 
-            # --- 🗺️ 新增：開盤/盤中熱錢板塊熱力圖 ---
-            st.subheader("🗺️ 開盤熱錢板塊熱力圖")
             if not tse_top.empty or not otc_top.empty:
-                # 合併上市櫃排行榜資料
+                # 1. 合併上市與上櫃的成交量排行榜
                 combined_top = pd.concat([tse_top, otc_top], ignore_index=True)
-                if not combined_top.empty:
-                    # 補上產業板塊標籤與成交億元轉換 (方便圖表閱讀)
-                    combined_top['代號乾淨'] = combined_top['證券代號'].astype(str).str.strip()
-                    combined_top['產業板塊'] = combined_top['代號乾淨'].map(SECTOR_MAP).fillna("🔥 其他熱門")
-                    combined_top['成交億'] = (combined_top['成交金額'] / 100000000).round(1)
+                
+                # 2. 資料清洗與對齊產業族群
+                combined_top['代號乾淨'] = combined_top['證券代號'].astype(str).str.strip()
+                combined_top['產業族群'] = combined_top['代號乾淨'].map(SECTOR_MAP).fillna("🔥 其他熱門個股")
+                combined_top['成交億'] = (combined_top['成交金額'] / 100000000).round(1)
 
-                    # 繪製 Treemap
+                # --- 📊 戰情圖表 A 欄與 B 欄 (雙圖並進) ---
+                col_chart1, col_chart2 = st.columns([4, 6])
+                
+                with col_chart1:
+                    st.subheader("🎯 類股資金佔比 (誰最吸金？)")
+                    # 按照產業族群做加總 (Group By)，計算出該族群吸納了前15大中多少%的熱錢
+                    sector_summary = combined_top.groupby('產業族群')['成交億'].sum().reset_index()
+                    sector_summary = sector_summary.sort_values(by='成交億', ascending=False)
+                    
+                    # 繪製高對比環形圖 (Donut Chart)
+                    fig_pie = px.pie(
+                        sector_summary, 
+                        values='成交億', 
+                        names='產業族群',
+                        hole=0.4,
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                    fig_pie.update_layout(
+                        template="plotly_dark", 
+                        showlegend=False, 
+                        margin=dict(t=10, l=10, r=10, b=10),
+                        height=350
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                with col_chart2:
+                    st.subheader("🗺️ 類股 × 個股熱錢分佈圖")
+                    # 繪製個股的階層樹狀圖 (依據產業族群進行分群分類)
                     fig_heat = px.treemap(
                         combined_top,
-                        path=[px.Constant("全市場資金焦點"), '產業板塊', '證券名稱'],
+                        path=[px.Constant("全市場資金焦點"), '產業族群', '證券名稱'],
                         values='成交億',
                         color='成交億',
-                        color_continuous_scale=['#262730', '#00cc96', '#ffd166', '#ff4b4b'], # 資金越大多空顏色越火熱
-                        title="板塊面積大小代表資金集中度 (單位：億元)"
+                        color_continuous_scale=['#262730', '#00cc96', '#ffd166', '#ff4b4b'], # 高熱度警示色系
                     )
-                    # 設定圖表標籤顯示方式：名稱 + 數值(億) + 佔父區塊百分比
-                    fig_heat.update_traces(textinfo="label+value+percent parent")
+                    fig_heat.update_traces(textinfo="label+value")
                     fig_heat.update_layout(
                         template="plotly_dark", 
-                        margin=dict(t=40, l=10, r=10, b=10),
-                        font=dict(size=14)
+                        margin=dict(t=10, l=10, r=10, b=10),
+                        height=350
                     )
                     st.plotly_chart(fig_heat, use_container_width=True)
+                    
+                # 提示主力動向
+                top_sector = sector_summary['產業族群'].iloc[0]
+                st.info(f"💡 **金流雷達即時解讀**：目前市場熱錢最密集的族群為 **【{top_sector}】**，資金進駐該板塊的力道最強，可優先切回「六星雷達掃描」頁面，查看該族群內有哪些個股已經觸發多頭共振訊號！")
             else:
-                st.warning("⚠️ 系統連線中或無排行榜資料，無法繪製熱力圖。")
+                st.warning("⚠️ 系統連線中或無排行榜資料，無法繪製類股金流圖。")
             
             st.divider()
             

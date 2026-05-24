@@ -813,20 +813,57 @@ if main_page == "🎯 股神六星雷達系統":
                     st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
 
         with t_top:
-            st.markdown("### 🔥 全市場成交值 Top 15 (金流觀測)")
-            st.markdown("觀測目前市場資金最集中的標的，抓出最強勢的主力動向。")
+            st.markdown("### 🔥 全市場成交值 Top 15 與資金熱力圖 (金流觀測)")
+            st.markdown("觀測目前市場資金最集中的板塊，一眼抓出最強勢的主力動向與開盤熱錢流向。")
             tse_top, otc_top = fetch_top15_ranking()
+
+            # --- 🗺️ 新增：開盤/盤中熱錢板塊熱力圖 ---
+            st.subheader("🗺️ 開盤熱錢板塊熱力圖")
+            if not tse_top.empty or not otc_top.empty:
+                # 合併上市櫃排行榜資料
+                combined_top = pd.concat([tse_top, otc_top], ignore_index=True)
+                if not combined_top.empty:
+                    # 補上產業板塊標籤與成交億元轉換 (方便圖表閱讀)
+                    combined_top['代號乾淨'] = combined_top['證券代號'].astype(str).str.strip()
+                    combined_top['產業板塊'] = combined_top['代號乾淨'].map(SECTOR_MAP).fillna("🔥 其他熱門")
+                    combined_top['成交億'] = (combined_top['成交金額'] / 100000000).round(1)
+
+                    # 繪製 Treemap
+                    fig_heat = px.treemap(
+                        combined_top,
+                        path=[px.Constant("全市場資金焦點"), '產業板塊', '證券名稱'],
+                        values='成交億',
+                        color='成交億',
+                        color_continuous_scale=['#262730', '#00cc96', '#ffd166', '#ff4b4b'], # 資金越大多空顏色越火熱
+                        title="板塊面積大小代表資金集中度 (單位：億元)"
+                    )
+                    # 設定圖表標籤顯示方式：名稱 + 數值(億) + 佔父區塊百分比
+                    fig_heat.update_traces(textinfo="label+value+percent parent")
+                    fig_heat.update_layout(
+                        template="plotly_dark", 
+                        margin=dict(t=40, l=10, r=10, b=10),
+                        font=dict(size=14)
+                    )
+                    st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.warning("⚠️ 系統連線中或無排行榜資料，無法繪製熱力圖。")
+            
+            st.divider()
+            
+            # --- 原本的 DataFrame 數據表顯示 ---
             col1, col2 = st.columns(2)
             with col1:
                 st.caption("🏆 上市成交值排行 (TWSE)")
                 if not tse_top.empty:
                     st.dataframe(tse_top.rename(columns={'成交金額':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-                else: st.warning("上市數據獲取失敗，請檢查 API 連線或等待盤後結算。")
+                else: 
+                    st.warning("上市數據獲取失敗，請檢查 API 連線或等待盤後結算。")
             with col2:
                 st.caption("🏆 上櫃成交值排行 (TPEX)")
                 if not otc_top.empty:
                     st.dataframe(otc_top.rename(columns={'成交金額':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-                else: st.warning("上櫃數據獲取失敗，請檢查 API 連線或等待盤後結算。")
+                else: 
+                    st.warning("上櫃數據獲取失敗，請檢查 API 連線或等待盤後結算。")
 
         with t2:
             st.markdown("### 📈 VPVR 籌碼透視 X 光機")

@@ -21,7 +21,7 @@ import io
 # === 1. 系統環境設定與機密管理 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="阿綜專屬：究極軍規雷達 v2.0", page_icon="📡", layout="wide")
+st.set_page_config(page_title="阿綜專屬：究極軍規雷達 v2.1", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -129,7 +129,6 @@ def safe_get_json(url, headers, max_retries=3):
         except ValueError:
             break
         except Exception as e:
-            # st.toast(f"網路連線異常: {e}") # 避免太頻繁彈出
             break
     return {}
 
@@ -139,22 +138,18 @@ def fetch_bulk_yf_data(full_ticker_list, period="1y"):
     """使用批次下載，大幅降低 API 請求次數，防止 IP 被 Yahoo 封鎖"""
     if not full_ticker_list: return {}
     
-    # 確保不會傳遞空字串
     valid_tickers = [t for t in full_ticker_list if t]
     tickers_str = " ".join(valid_tickers)
     res_dict = {}
     
     try:
-        # bulk download
         data = yf.download(tickers_str, period=period, threads=True, progress=False)
         
         if len(valid_tickers) == 1:
-            # 如果只有一檔，yfinance 不會回傳 MultiIndex
             df_t = data.dropna(subset=['Close'])
             if not df_t.empty:
                 res_dict[valid_tickers[0]] = df_t
         else:
-            # 多檔股票，解析 MultiIndex
             for t in valid_tickers:
                 try:
                     df_t = pd.DataFrame({
@@ -467,7 +462,7 @@ def get_inst_data():
         st.toast(f"法人籌碼資料載入異常: {e}")
     return inst_map
 
-# === 10. 雷達與各項診斷圖表邏輯 (已換上 V8 引擎接頭) ===
+# === 10. 雷達與各項診斷圖表邏輯 (已換上 V8 引擎接頭 + 星等修正) ===
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
     """改良版：接收已經由批次下載好的 df_ticker，不再單獨敲 API"""
     try:
@@ -527,8 +522,13 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
         elif is_daytrader_trap: risk_level = "⚠️ 留意隔日沖砸盤"
         
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean_id}/technical-analysis"
-        star_display = "⭐"*s if s>0 else "休息"
-        if s >= 7: star_display = "🌟"*7 
+        
+        # 🌟 星星反向與排版修正：使用 7 級標準化實心/空心呈現
+        max_stars = 7
+        if s > 0:
+            star_display = ("★" * s) + ("☆" * (max_stars - s))
+        else:
+            star_display = "☁️ 盤整/休息"
         
         return {
             '標的': f"{clean_id} {name}", '看盤連結': chart_url, '星等': star_display, '收盤': round(c,2), 
@@ -536,7 +536,6 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
             '星星數': s, '處置與籌碼風險': risk_level
         }
     except Exception as e:
-        # st.toast(f"個股分析異常 ({clean_id}): {e}")
         return None
 
 def plot_advanced_chart_with_vpvr(symbol, cost_price, period="6mo"):
@@ -788,12 +787,10 @@ if main_page == "🎯 股神六星雷達系統":
             res, danger_res = [], []
             
             with st.spinner("🚀 啟動 V8 雙渦輪引擎批次下載中..."):
-                # 先映射完整 ID，再送給 yf.download
                 full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                 bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                 
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    # 改用 analyze_stock_score_v2，把準備好的 DataFrame 傳進去
                     futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")), CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list) for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     for f in as_completed(futs):
                         r = f.result()
@@ -812,11 +809,14 @@ if main_page == "🎯 股神六星雷達系統":
             st.divider()
             st.subheader("🔥 今日最強突破 (4星以上)")
             if res:
-                df_res = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
+                # 排序並加上名次
+                df_res = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False]).reset_index(drop=True)
+                df_res.insert(0, '名次', df_res.index + 1)
+                
                 for _, row in df_res.iterrows():
                     st.markdown(f"""
                     <div style='background-color:#1E1E1E; padding:15px; border-radius:10px; margin-bottom:12px; border-left: 5px solid #ffd166; box-shadow: 2px 2px 5px rgba(0,0,0,0.5);'>
-                        <h4 style='margin:0; color:#ffd166; font-size:18px;'>{row['標的']} {row['星等']}</h4>
+                        <h4 style='margin:0; color:#ffd166; font-size:18px;'>🏆 No.{row['名次']} | {row['標的']} {row['星等']}</h4>
                         <p style='margin:8px 0 5px 0; font-size:16px; color:#FFFFFF;'>
                             收盤：<b style='color:#00cc96; font-size:18px;'>{row['收盤']}</b> ｜ 
                             量能：<b style='color:#00cc96; font-size:18px;'>{row['今日量(張)']}</b> <span style='font-size:14px; color:#CCCCCC;'>千張</span>
@@ -857,7 +857,6 @@ if main_page == "🎯 股神六星雷達系統":
                 hot_list = get_hot_rank_ids()
                 res, pb = [], st.progress(0)
                 
-                # V8 引擎替換原本的慢速逐筆查詢
                 with st.spinner("🚀 啟動 V8 雙渦輪引擎批次下載歷史數據中... (速度狂飆)"):
                     full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                     bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
@@ -871,8 +870,11 @@ if main_page == "🎯 股神六星雷達系統":
                             if f.result(): res.append(f.result())
                             
                 if res:
-                    df = pd.DataFrame(res).sort_values(by='星星數', ascending=False)
-                    display_df = df[['標的', '看盤連結', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']]
+                    # 加入名次排名與排序邏輯
+                    df = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False]).reset_index(drop=True)
+                    df.insert(0, '名次', df.index + 1)
+                    
+                    display_df = df[['名次', '標的', '看盤連結', '星等', '收盤', '處置與籌碼風險', '籌碼大戶(張)', '今日量(張)', '觸發條件']]
                     
                     def highlight_tags(val):
                         if isinstance(val, str):
@@ -892,6 +894,7 @@ if main_page == "🎯 股神六星雷達系統":
                         hide_index=True, 
                         height=580,
                         column_config={
+                            "名次": st.column_config.NumberColumn("🏆 名次"),
                             "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
                         }
                     )
@@ -1132,7 +1135,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             bulk_data_dict = fetch_bulk_yf_data(full_ids_in_df, period="1y")
 
             with ThreadPoolExecutor(max_workers=8) as ex:
-                # 這裡也要用 v2 的引擎
                 futs = {}
                 for _, row in analyzed_df.iterrows():
                     t_clean = str(row['代號'])
@@ -1212,7 +1214,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.subheader("📊 盤面戰情總覽")
         buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
         sell_count = analyzed_df[analyzed_df['動向狀態'].str.contains('倒貨|賣')].shape[0]
-        star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('⭐') >= 4)].shape[0]
+        star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('★') >= 4)].shape[0]
         danger_count = analyzed_df[analyzed_df['處置與風險'].str.contains('風險|警戒|隔日沖')].shape[0]
         
         m1, m2, m3, m4 = st.columns(4)
@@ -1224,8 +1226,10 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.divider()
         st.subheader("🔥 經理人持股 × 成本防護 × 雙引擎共振榜")
         
+        # 加上名次排序顯示
         display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估'])
-        display_df = display_df.rename(columns={'連續天數顯示': '連續天數'})
+        display_df = display_df.rename(columns={'連續天數顯示': '連續天數'}).reset_index(drop=True)
+        display_df.insert(0, '名次', display_df.index + 1)
         
         def highlight_danger(val):
             if isinstance(val, str) and ('風險' in val or '警戒' in val or '隔日沖' in val or '滿水位' in val): 
@@ -1244,6 +1248,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
             hide_index=True,
             height=580, 
             column_config={
+                "名次": st.column_config.NumberColumn("🏆 名次"),
                 "今日買賣超(張)": st.column_config.NumberColumn("今日買賣超(張)", format="%d"),
                 "最新持股張數": st.column_config.NumberColumn("最新持股張數", format="%d"),
                 "預估權重(%)": st.column_config.NumberColumn("預估權重(%)", format="%.2f %%"),
@@ -1271,7 +1276,6 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
             if os.path.exists(BROKER_DATA_FILE):
                 try:
                     mock_branch_data = pd.read_csv(BROKER_DATA_FILE)
-                    # 篩選出該檔股票的資料 (假設你的 CSV 裡面有 "代號" 欄位)
                     if '代號' in mock_branch_data.columns:
                         mock_branch_data = mock_branch_data[mock_branch_data['代號'].astype(str) == target_id]
                     st.success("✅ 已成功掛載本地端【真實盤後分點明細庫】！")
@@ -1282,7 +1286,6 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
                 st.warning("⚠️ 找不到本地真實盤後分點資料庫 (`daily_broker_data.csv`)。為您切換至【模擬展示模式】。建議撰寫獨立爬蟲腳本每日更新此檔案。")
                 time.sleep(1) 
                 
-                # 模擬展示用備援資料
                 mock_branch_data = pd.DataFrame({
                     "券商分點": ["凱基-台北", "台灣匯立", "摩根大通", "美林", "元大-土城永寧", "富邦-建國", "國泰-敦南", "瑞士信貸", "元富", "群益金鼎-大安"],
                     "買進張數": [4500, 3200, 2800, 2100, 1800, 1500, 1200, 1000, 800, 600],
@@ -1290,12 +1293,10 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
                 })
 
             if not mock_branch_data.empty:
-                # 確保有這三個關鍵欄位
                 if all(col in mock_branch_data.columns for col in ['買進張數', '賣出張數', '券商分點']):
                     mock_branch_data['買賣超'] = mock_branch_data['買進張數'] - mock_branch_data['賣出張數']
                     mock_branch_data = mock_branch_data.sort_values(by='買賣超', ascending=False)
                     
-                    # ☠️ 核心邏輯：比對隔日沖黑名單
                     def check_day_trader(branch_name):
                         for trader in DAY_TRADER_BRANCHES:
                             if trader in str(branch_name):
@@ -1306,7 +1307,6 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
 
                     mock_branch_data['大戶屬性'] = mock_branch_data['券商分點'].apply(check_day_trader)
                     
-                    # 計算隔日沖籌碼佔比
                     total_buy = mock_branch_data['買賣超'].sum()
                     danger_buy = mock_branch_data[mock_branch_data['大戶屬性'].str.contains("🚨|⚠️")]['買賣超'].sum()
                     danger_ratio = (danger_buy / total_buy) * 100 if total_buy > 0 else 0
@@ -1325,7 +1325,6 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
                         
                     st.divider()
                     
-                    # 視覺化籌碼分佈
                     def highlight_traders(val):
                         if isinstance(val, str):
                             if '🚨' in val: return 'color: #ff4b4b; font-weight: bold'

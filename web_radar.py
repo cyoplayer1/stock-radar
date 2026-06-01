@@ -547,7 +547,7 @@ def diagnose_holding(ticker_in):
         if not status: status.append("✅ 強勢多頭")
         return {
             "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
-            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
+            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "状况": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
         }
     except: return None
 
@@ -669,71 +669,42 @@ def analyze_manager_moves(df):
         })
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# ==========================================
-# 分頁 5: 🚀 早盤渦輪截擊 (預估爆量點火)
-# ==========================================
-elif main_page == "🚀 早盤渦輪截擊":
-    st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")
-    st.info("⚡ **系統原理**：結合 Fugle 即時報價與 YFinance 歷史庫，自動比對「今日早盤累計量」與「昨日全天總量」。當跳空 > 2% 且預估量能突破時，即為強力點火訊號！")
-    
-    # 新增測試開關
-    test_mode = st.toggle("🔧 開啟寬鬆測試模式 (無跳空限制，用來確認資料連線是否正常)", value=False)
-    
-    if st.button("🚨 啟動早盤極速點火掃描", use_container_width=True):
-        with st.spinner("🚀 啟動 V8 雙渦輪引擎預載昨日總量資料..."):
-            full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
-            bulk_data_dict = fetch_bulk_yf_data(full_ids, period="5d") # 抓取近幾天確保能拿到昨日交易量
+# === 12. 🚀 早盤渦輪截擊雷達 (結合預估爆量與測試模式) ===
+def get_morning_momentum_with_vol(clean_id, prev_vol, full_name, is_test_mode=False):
+    try:
+        url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{clean_id}"
+        res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=3, verify=False)
+        if res.status_code != 200: return None
+        data = res.json()
+        
+        open_p = data.get('openPrice')
+        close_p = data.get('closePrice')
+        prev_close = data.get('previousClose')
+        vol_now = data.get('total', {}).get('tradeVolume', 0)
+        
+        if not open_p or not prev_close: return None
+        
+        gap_pct = ((open_p - prev_close) / prev_close) * 100
+        cur_pct = ((close_p - prev_close) / prev_close) * 100
+        
+        # 爆量計算：如果目前的量已經大於昨天總量的 15% (假設現在是 9:15)
+        is_breakout_vol = False
+        if prev_vol > 0 and vol_now > (prev_vol * 0.15):
+            is_breakout_vol = True
             
-        with st.spinner("⚡ 極速連線富果主機，比對即時跳空動能與爆量狀況..."):
-            runners = []
-            valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
+        # 判斷邏輯：如果是測試模式就全放行；否則嚴格要求跳空與漲幅 > 2%
+        if is_test_mode or (gap_pct >= 2.0 and cur_pct >= 2.0):
+            is_super_strong = close_p >= open_p
+            status = "🔥 點火噴出" if is_super_strong else "⚠️ 留上影線"
+            if is_breakout_vol: status += " (🌟預估爆量)"
+            elif is_test_mode and not (gap_pct >= 2.0 and cur_pct >= 2.0): status = "⚪ 觀察中 (未達標)"
             
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = {}
-                for t in valid_list:
-                    df_hist = bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")]
-                    if len(df_hist) >= 2:
-                        prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now().hour < 14 else df_hist['Volume'].iloc[-1]
-                    else:
-                        prev_vol = 0
-                    
-                    full_name = STOCKS_DICT.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), t)
-                    # 傳入 test_mode 參數
-                    futs[ex.submit(get_morning_momentum_with_vol, t, prev_vol, full_name, test_mode)] = t
-                
-                for f in as_completed(futs):
-                    res = f.result()
-                    if res: runners.append(res)
-            
-            if runners:
-                df_run = pd.DataFrame(runners).sort_values(by="即時漲幅", ascending=False).reset_index(drop=True)
-                df_run.insert(0, '🔥 排名', df_run.index + 1)
-                
-                def highlight_morning(val):
-                    if isinstance(val, str):
-                        if '🌟預估爆量' in val: return 'color: #ffd166; font-weight: bold'
-                        elif '🔥' in val: return 'color: #ff4b4b; font-weight: bold'
-                        elif '⚠️' in val: return 'color: #00cc96'
-                    return ''
-                
-                styled_morning_df = df_run[['🔥 排名', '代號', '名稱', '即時價', '跳空顯示', '漲幅顯示', '早盤型態', '目前累積量', '昨日總量']].style.map(highlight_morning, subset=['早盤型態'])
-                
-                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！")
-                st.dataframe(
-                    styled_morning_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "跳空顯示": "跳空開高", "漲幅顯示": "即時漲幅",
-                        "目前累積量": st.column_config.NumberColumn("盤中目前累積量 (股)"),
-                        "昨日總量": st.column_config.NumberColumn("昨日全天總量 (股)")
-                    }
-                )
-            else:
-                if test_mode:
-                    st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
-                else:
-                    st.warning("👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。您可以開啟上方的【寬鬆測試模式】再掃描一次看看！")
+            return {
+                "代號": clean_id, "名稱": full_name, "跳空幅度": gap_pct, "即時漲幅": cur_pct,
+                "跳空顯示": f"{gap_pct:.1f}%", "漲幅顯示": f"{cur_pct:.1f}%",
+                "即時價": close_p, "目前累積量": vol_now, "昨日總量": int(prev_vol), "早盤型態": status
+            }
+    except: return None
 
 
 # === 13. 側邊欄與大盤風向球 ===
@@ -1206,6 +1177,9 @@ elif main_page == "🚀 早盤渦輪截擊":
     st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")
     st.info("⚡ **系統原理**：結合 Fugle 即時報價與 YFinance 歷史庫，自動比對「今日早盤累計量」與「昨日全天總量」。當跳空 > 2% 且預估量能突破時，即為強力點火訊號！")
     
+    # 新增測試開關
+    test_mode = st.toggle("🔧 開啟寬鬆測試模式 (無跳空限制，用來確認資料連線是否正常)", value=False)
+    
     if st.button("🚨 啟動早盤極速點火掃描", use_container_width=True):
         with st.spinner("🚀 啟動 V8 雙渦輪引擎預載昨日總量資料..."):
             full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
@@ -1218,27 +1192,24 @@ elif main_page == "🚀 早盤渦輪截擊":
             with ThreadPoolExecutor(max_workers=5) as ex:
                 futs = {}
                 for t in valid_list:
-                    # 取得該檔股票昨日總成交量
                     df_hist = bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")]
                     if len(df_hist) >= 2:
-                        # 以免今日盤中已產生新 K 棒，往回推算確保抓到昨日量
                         prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now().hour < 14 else df_hist['Volume'].iloc[-1]
                     else:
                         prev_vol = 0
                     
                     full_name = STOCKS_DICT.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), t)
-                    futs[ex.submit(get_morning_momentum_with_vol, t, prev_vol, full_name)] = t
+                    # 傳入 test_mode 參數
+                    futs[ex.submit(get_morning_momentum_with_vol, t, prev_vol, full_name, test_mode)] = t
                 
                 for f in as_completed(futs):
                     res = f.result()
                     if res: runners.append(res)
             
             if runners:
-                # 依照漲幅排序並加上排名
                 df_run = pd.DataFrame(runners).sort_values(by="即時漲幅", ascending=False).reset_index(drop=True)
                 df_run.insert(0, '🔥 排名', df_run.index + 1)
                 
-                # 視覺化上色
                 def highlight_morning(val):
                     if isinstance(val, str):
                         if '🌟預估爆量' in val: return 'color: #ffd166; font-weight: bold'
@@ -1248,7 +1219,7 @@ elif main_page == "🚀 早盤渦輪截擊":
                 
                 styled_morning_df = df_run[['🔥 排名', '代號', '名稱', '即時價', '跳空顯示', '漲幅顯示', '早盤型態', '目前累積量', '昨日總量']].style.map(highlight_morning, subset=['早盤型態'])
                 
-                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔今日早盤強勢點火標的！")
+                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！")
                 st.dataframe(
                     styled_morning_df, 
                     use_container_width=True, 
@@ -1260,4 +1231,7 @@ elif main_page == "🚀 早盤渦輪截擊":
                     }
                 )
             else:
-                st.warning("👀 目前沒有符合跳空點火或預估爆量條件的標的，請稍後再掃描一次。")
+                if test_mode:
+                    st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
+                else:
+                    st.warning("👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。您可以開啟上方的【寬鬆測試模式】再掃描一次看看！")

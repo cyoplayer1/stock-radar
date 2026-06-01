@@ -511,7 +511,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
         }
     except: return None
 
-# === 🔥 新增：V12 終極增壓飆股引擎 ===
+# === 🔥 新增：V12 終極增壓飆股引擎 (含盤後相容晶片) ===
 def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
     """
     專抓「盤整極度壓縮後，帶出天量突破」的強勢大飆股
@@ -527,27 +527,35 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
             
         c = df['Close'].iloc[-1]
         v = df['Volume'].iloc[-1]
-        v5_avg = df['Volume'].iloc[-6:-1].mean()
         
+        # 自動判定：如果現在是盤後或假日，把基準點往前推一天計算歷史均量
+        now_tw = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        is_market_closed = now_tw.hour >= 14 or now_tw.weekday() >= 5
+        
+        if is_market_closed:
+            v5_avg = df['Volume'].iloc[-7:-2].mean()
+            recent_10d_high = df['High'].iloc[-12:-2].max()
+            recent_10d_low = df['Low'].iloc[-12:-2].min()
+            is_breaking_high = c >= df['High'].iloc[-22:-2].max()
+        else:
+            v5_avg = df['Volume'].iloc[-6:-1].mean()
+            recent_10d_high = df['High'].iloc[-11:-1].max()
+            recent_10d_low = df['Low'].iloc[-11:-1].min()
+            is_breaking_high = c >= df['High'].iloc[-21:-1].max()
+
         if v5_avg < 500000: return None
         
+        # 條件 A: 均線多頭發車 (5日 > 20日 > 60日)
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
-        
-        # 條件 A: 均線多頭發車
         is_bull_trend = (df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1])
         
         # 條件 B: 近期極度壓縮 (震幅小於 8%)
-        recent_10d_high = df['High'].iloc[-11:-1].max()
-        recent_10d_low = df['Low'].iloc[-11:-1].min()
         consolidation_pct = (recent_10d_high - recent_10d_low) / recent_10d_low
         is_tight_consolidation = consolidation_pct < 0.08 
         
-        # 條件 C: 創 20 日新高表態
-        is_breaking_high = c >= df['High'].iloc[-21:-1].max()
-        
-        # 條件 D: 旱地拔蔥大爆量 (2.5 倍均量)
+        # 條件 D: 旱地拔蔥大爆量 (今日量是大於 5 日均量 2.5 倍)
         is_volume_explosion = v > (v5_avg * 2.5)
         
         if is_bull_trend and is_tight_consolidation and is_breaking_high and is_volume_explosion:
@@ -1296,7 +1304,7 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
     st.title("☠️ 隔日沖分點照妖鏡 (主力追蹤網)")
     target_id = st.text_input("🔍 輸入懷疑有隔日沖介入的股票代號 (支援前述清單)", value="3034")
     
-    if st.button("🕵️‍♂️ 啟動分點 X 光機掃描", use_container_width=True):
+    if st.button("🕵️‍♂️ 啟提分點 X 光機掃描", use_container_width=True):
         with st.spinner("正在解析券商進出明細與大戶籌碼足跡..."):
             BROKER_DATA_FILE = "daily_broker_data.csv"
             if os.path.exists(BROKER_DATA_FILE):

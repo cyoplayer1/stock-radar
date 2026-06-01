@@ -1130,8 +1130,8 @@ if main_page == "🎯 股神六星雷達系統":
             st.markdown("---")
             st.markdown("### 🏰 波段護城河監控")
             c_moat1, c_moat2 = st.columns(2)
-            with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="3034", key="moat_in")
-            with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=431.0, step=1.0, key="moat_cost")
+            with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="2317", key="moat_in")
+            with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=274.0, step=1.0, key="moat_cost")
             if st.button("🛡️ 啟護城河防守掃描", use_container_width=True):
                 moat_data = analyze_dynamic_moat(moat_id, cost_p)
                 if moat_data:

@@ -491,8 +491,10 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
         chart_url = f"https://tw.stock.yahoo.com/quote/{clean_id}/technical-analysis"
         
         max_stars = 7
-        if s > 0: star_display = ("★" * s) + ("☆" * (max_stars - s))
-        else: star_display = "☁️ 盤整/休息"
+        if s > 0: 
+            star_display = ("🌟" * s) + ("⚫" * (max_stars - s))
+        else: 
+            star_display = "💤 盤整 (無星)"
         
         return {
             '標的': f"{clean_id} {name}", '看盤連結': chart_url, '星等': star_display, '收盤': round(c,2), 
@@ -795,7 +797,10 @@ if main_page == "🎯 股神六星雷達系統":
                 for _, row in df_res.iterrows():
                     st.markdown(f"""
                     <div style='background-color:#1E1E1E; padding:15px; border-radius:10px; margin-bottom:12px; border-left: 5px solid #ffd166; box-shadow: 2px 2px 5px rgba(0,0,0,0.5);'>
-                        <h4 style='margin:0; color:#ffd166; font-size:18px;'>🏆 No.{row['名次']} | {row['標的']} {row['星等']}</h4>
+                        <h4 style='margin:0; color:#ffd166; font-size:18px;'>
+                            🏆 No.{row['名次']} | {row['標的']} 
+                            <span style='font-size:22px; text-shadow: 0px 0px 8px #FFD700;'>{row['星等']}</span>
+                        </h4>
                         <p style='margin:8px 0 5px 0; font-size:16px; color:#FFFFFF;'>
                             收盤：<b style='color:#00cc96; font-size:18px;'>{row['收盤']}</b> ｜ 
                             量能：<b style='color:#00cc96; font-size:18px;'>{row['今日量(張)']}</b> <span style='font-size:14px; color:#CCCCCC;'>千張</span>
@@ -859,7 +864,11 @@ if main_page == "🎯 股神六星雷達系統":
                     styled_df = display_df.style.map(highlight_tags, subset=['處置與籌碼風險', '觸發條件'])
                     st.dataframe(
                         styled_df, use_container_width=True, hide_index=True, height=580,
-                        column_config={"名次": st.column_config.NumberColumn("🏆 名次"), "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")}
+                        column_config={
+                            "名次": st.column_config.NumberColumn("🏆 名次"), 
+                            "星等": st.column_config.TextColumn("🌟 戰力星等"), 
+                            "看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")
+                        }
                     )
                 else:
                     st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
@@ -1038,11 +1047,11 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     t = futs[f]
                     res = f.result()
                     if res:
-                        star_dict[t] = res['星等'] if res['星等'] != "休息" else "☁️ 盤整/休息"
+                        star_dict[t] = res['星等']
                         price_dict[t] = res['收盤']
                         warning_dict[t] = res.get('處置與籌碼風險', "✅ 安全")
                     else:
-                        star_dict[t] = "☁️ 盤整/休息"
+                        star_dict[t] = "💤 盤整 (無星)"
                         price_dict[t] = fetch_fast_price(t)
                         warning_dict[t] = "✅ 安全"
             
@@ -1083,7 +1092,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.divider()
         buy_count = analyzed_df[analyzed_df['動向狀態'].str.contains('買')].shape[0]
         sell_count = analyzed_df[analyzed_df['動向狀態'].str.contains('倒貨|賣')].shape[0]
-        star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('★') >= 4)].shape[0]
+        star_count = analyzed_df[(analyzed_df['動向狀態'].str.contains('買')) & (analyzed_df['六星技術評等'].str.count('🌟') >= 4)].shape[0]
         danger_count = analyzed_df[analyzed_df['處置與風險'].str.contains('風險|警戒|隔日沖')].shape[0]
         
         m1, m2, m3, m4 = st.columns(4)

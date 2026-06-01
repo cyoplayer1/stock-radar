@@ -1254,4 +1254,19 @@ elif main_page == "🚀 早盤渦輪截擊":
                 
                 styled_morning_df = df_run[['🔥 排名', '代號', '名稱', '即時價', '跳空顯示', '漲幅顯示', '早盤型態', '目前累積量', '昨日總量']].style.map(highlight_morning, subset=['早盤型態'])
                 
-                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！掃描時間：{datetime.datetime.now().strftime('%H
+                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！掃描時間：{datetime.datetime.now().strftime('%H:%M:%S')}")
+                st.dataframe(
+                    styled_morning_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "跳空顯示": "跳空開高", "漲幅顯示": "即時漲幅",
+                        "目前累積量": st.column_config.NumberColumn("盤中目前累積量 (股)"),
+                        "昨日總量": st.column_config.NumberColumn("昨日全天總量 (股)")
+                    }
+                )
+            else:
+                if test_mode:
+                    st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
+                else:
+                    st.warning(f"👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。下次掃描時間：30秒後 (自動巡航啟動中)")

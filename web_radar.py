@@ -18,10 +18,19 @@ import xml.etree.ElementTree as ET
 from gtts import gTTS
 import io
 
+# === 新增：非同步連線與自動刷新套件 ===
+import asyncio
+import aiohttp
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
+    st.error("⚠️ 缺少自動刷新套件，請在終端機執行: pip install streamlit-autorefresh")
+
 # === 1. 系統環境設定與機密管理 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="阿綜專屬：究極軍規雷達 v2.2", page_icon="📡", layout="wide")
+st.set_page_config(page_title="阿綜專屬：究極軍規雷達 v3.0", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -433,7 +442,7 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 10. 雷達與各項診斷圖表邏輯 (V8 引擎 + 星等修正) ===
+# === 10. 雷達與各項診斷圖表邏輯 ===
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
     try:
         df = df_ticker.copy()
@@ -547,7 +556,7 @@ def diagnose_holding(ticker_in):
         if not status: status.append("✅ 強勢多頭")
         return {
             "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
-            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "状况": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
+            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
         }
     except: return None
 
@@ -669,43 +678,70 @@ def analyze_manager_moves(df):
         })
     return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
 
-# === 12. 🚀 早盤渦輪截擊雷達 (結合預估爆量與測試模式) ===
-def get_morning_momentum_with_vol(clean_id, prev_vol, full_name, is_test_mode=False):
+# === 12. 🚀 早盤渦輪截擊雷達 (V12 雙渦輪非同步版 + 自動巡航) ===
+async def fetch_fugle_intraday_async(session, clean_id, prev_vol, full_name, is_test_mode):
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{clean_id}"
+    headers = {"X-API-KEY": FUGLE_API_KEY}
     try:
-        url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{clean_id}"
-        res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=3, verify=False)
-        if res.status_code != 200: return None
-        data = res.json()
-        
-        open_p = data.get('openPrice')
-        close_p = data.get('closePrice')
-        prev_close = data.get('previousClose')
-        vol_now = data.get('total', {}).get('tradeVolume', 0)
-        
-        if not open_p or not prev_close: return None
-        
-        gap_pct = ((open_p - prev_close) / prev_close) * 100
-        cur_pct = ((close_p - prev_close) / prev_close) * 100
-        
-        # 爆量計算：如果目前的量已經大於昨天總量的 15% (假設現在是 9:15)
-        is_breakout_vol = False
-        if prev_vol > 0 and vol_now > (prev_vol * 0.15):
-            is_breakout_vol = True
+        async with session.get(url, headers=headers, timeout=5, ssl=False) as response:
+            if response.status != 200:
+                return None
+            data = await response.json()
             
-        # 判斷邏輯：如果是測試模式就全放行；否則嚴格要求跳空與漲幅 > 2%
-        if is_test_mode or (gap_pct >= 2.0 and cur_pct >= 2.0):
-            is_super_strong = close_p >= open_p
-            status = "🔥 點火噴出" if is_super_strong else "⚠️ 留上影線"
-            if is_breakout_vol: status += " (🌟預估爆量)"
-            elif is_test_mode and not (gap_pct >= 2.0 and cur_pct >= 2.0): status = "⚪ 觀察中 (未達標)"
+            open_p = data.get('openPrice')
+            close_p = data.get('closePrice')
+            prev_close = data.get('previousClose')
+            vol_now = data.get('total', {}).get('tradeVolume', 0)
             
-            return {
-                "代號": clean_id, "名稱": full_name, "跳空幅度": gap_pct, "即時漲幅": cur_pct,
-                "跳空顯示": f"{gap_pct:.1f}%", "漲幅顯示": f"{cur_pct:.1f}%",
-                "即時價": close_p, "目前累積量": vol_now, "昨日總量": int(prev_vol), "早盤型態": status
-            }
-    except: return None
+            if not open_p or not prev_close: return None
+            
+            gap_pct = ((open_p - prev_close) / prev_close) * 100
+            cur_pct = ((close_p - prev_close) / prev_close) * 100
+            
+            # 爆量計算：如果目前的量已經大於昨天總量的 15% (假設現在是 9:15)
+            is_breakout_vol = False
+            if prev_vol > 0 and vol_now > (prev_vol * 0.15):
+                is_breakout_vol = True
+                
+            # 判斷邏輯：如果是測試模式就全放行；否則嚴格要求跳空與漲幅 > 2%
+            if is_test_mode or (gap_pct >= 2.0 and cur_pct >= 2.0):
+                is_super_strong = close_p >= open_p
+                status = "🔥 點火噴出" if is_super_strong else "⚠️ 留上影線"
+                if is_breakout_vol: status += " (🌟預估爆量)"
+                elif is_test_mode and not (gap_pct >= 2.0 and cur_pct >= 2.0): status = "⚪ 觀察中 (未達標)"
+                
+                return {
+                    "代號": clean_id, "名稱": full_name, "跳空幅度": gap_pct, "即時漲幅": cur_pct,
+                    "跳空顯示": f"{gap_pct:.1f}%", "漲幅顯示": f"{cur_pct:.1f}%",
+                    "即時價": close_p, "目前累積量": vol_now, "昨日總量": int(prev_vol), "早盤型態": status
+                }
+    except Exception as e:
+        return None
 
+async def run_morning_scan_async(valid_list, bulk_data_dict, test_mode):
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for t in valid_list:
+            df_hist = bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"))
+            prev_vol = 0
+            if df_hist is not None and len(df_hist) >= 2:
+                prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now().hour < 14 else df_hist['Volume'].iloc[-1]
+            
+            clean_id = t
+            full_name = STOCKS_DICT.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), t)
+            tasks.append(fetch_fugle_intraday_async(session, clean_id, prev_vol, full_name, test_mode))
+        
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r]
+
+# 安全執行 async 的輔助函數，避免 Jupyter 或 Streamlit 重複啟動 event loop 報錯
+def run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 # === 13. 側邊欄與大盤風向球 ===
 st.sidebar.title("📡 阿綜軍規操盤台")
@@ -1171,40 +1207,39 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
             else: st.warning(f"目前沒有找到 {target_id} 的分點資料。")
 
 # ==========================================
-# 分頁 5: 🚀 早盤渦輪截擊 (預估爆量點火)
+# 分頁 5: 🚀 早盤渦輪截擊 (V12 雙渦輪非同步版 + 自動巡航)
 # ==========================================
 elif main_page == "🚀 早盤渦輪截擊":
     st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")
-    st.info("⚡ **系統原理**：結合 Fugle 即時報價與 YFinance 歷史庫，自動比對「今日早盤累計量」與「昨日全天總量」。當跳空 > 2% 且預估量能突破時，即為強力點火訊號！")
+    st.info("⚡ **系統原理**：以 `aiohttp` 非同步極速比對「今日早盤累計量」與「昨日全天總量」。當跳空 > 2% 且預估量能突破時，即為強力點火訊號！")
     
-    # 新增測試開關
-    test_mode = st.toggle("🔧 開啟寬鬆測試模式 (無跳空限制，用來確認資料連線是否正常)", value=False)
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        test_mode = st.toggle("🔧 開啟寬鬆測試模式 (無跳空限制)", value=False)
+    with col_t2:
+        if st_autorefresh is not None:
+            auto_refresh_on = st.toggle("🔄 開啟自動巡航 (每 30 秒自動刷新並掃描)", value=False)
+            if auto_refresh_on:
+                st_autorefresh(interval=30 * 1000, key="morning_autorefresh")
+        else:
+            auto_refresh_on = False
+            st.warning("請先安裝 streamlit-autorefresh 以啟用自動巡航")
     
-    if st.button("🚨 啟動早盤極速點火掃描", use_container_width=True):
-        with st.spinner("🚀 啟動 V8 雙渦輪引擎預載昨日總量資料..."):
+    # 若開啟自動巡航或手動按下按鈕，則執行掃描
+    if auto_refresh_on or st.button("🚨 啟動早盤極速點火掃描", use_container_width=True):
+        with st.spinner("🚀 啟動 V12 雙渦輪引擎預載昨日總量資料..."):
             full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
-            bulk_data_dict = fetch_bulk_yf_data(full_ids, period="5d") # 抓取近幾天確保能拿到昨日交易量
+            bulk_data_dict = fetch_bulk_yf_data(full_ids, period="5d")
             
-        with st.spinner("⚡ 極速連線富果主機，比對即時跳空動能與爆量狀況..."):
-            runners = []
+        with st.spinner("⚡ 極速非同步連線富果主機中..."):
             valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
             
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                futs = {}
-                for t in valid_list:
-                    df_hist = bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")]
-                    if len(df_hist) >= 2:
-                        prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now().hour < 14 else df_hist['Volume'].iloc[-1]
-                    else:
-                        prev_vol = 0
-                    
-                    full_name = STOCKS_DICT.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), t)
-                    # 傳入 test_mode 參數
-                    futs[ex.submit(get_morning_momentum_with_vol, t, prev_vol, full_name, test_mode)] = t
-                
-                for f in as_completed(futs):
-                    res = f.result()
-                    if res: runners.append(res)
+            # 使用非同步框架大幅提升獲取報價速度
+            if aiohttp:
+                runners = run_async(run_morning_scan_async(valid_list, bulk_data_dict, test_mode))
+            else:
+                st.error("⚠️ 缺少 aiohttp 套件，無法啟動極速非同步連線。請在終端機執行: pip install aiohttp")
+                runners = []
             
             if runners:
                 df_run = pd.DataFrame(runners).sort_values(by="即時漲幅", ascending=False).reset_index(drop=True)
@@ -1219,19 +1254,4 @@ elif main_page == "🚀 早盤渦輪截擊":
                 
                 styled_morning_df = df_run[['🔥 排名', '代號', '名稱', '即時價', '跳空顯示', '漲幅顯示', '早盤型態', '目前累積量', '昨日總量']].style.map(highlight_morning, subset=['早盤型態'])
                 
-                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！")
-                st.dataframe(
-                    styled_morning_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "跳空顯示": "跳空開高", "漲幅顯示": "即時漲幅",
-                        "目前累積量": st.column_config.NumberColumn("盤中目前累積量 (股)"),
-                        "昨日總量": st.column_config.NumberColumn("昨日全天總量 (股)")
-                    }
-                )
-            else:
-                if test_mode:
-                    st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
-                else:
-                    st.warning("👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。您可以開啟上方的【寬鬆測試模式】再掃描一次看看！")
+                st.success(f"🎯 鎖定完成！共抓到 {len(df_run)} 檔標的！掃描時間：{datetime.datetime.now().strftime('%H

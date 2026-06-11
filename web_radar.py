@@ -1465,65 +1465,157 @@ elif main_page == "🚀 早盤渦輪截擊":
 # ==========================================
 # 分頁 6: 🌐 全球金融戰情室 (全新整合)
 # ==========================================
-elif main_page == "🌐 全球金融戰情室":
-    st.title("🌐 全球金融戰情室 (AI旗艦版)")
-    st.caption("🕒 最後更新時間 (台灣): 2025-11-21 15:36:17")
-    st.markdown("---")
+import streamlit as st
+import pandas as pd
+import numpy as np
 
-    # 建立導覽頁籤 (Tabs)
-    tabs = st.tabs([
-        "💀 AI 戰情", 
-        "🇹🇼 台股戰略", 
-        "🚀 風險雷達", 
-        "💎 半導體雷達", 
-        "🔄 輪動策略", 
-        "🌐 資產配置", 
-        "📈 趨勢圖"
-    ])
+# 1. 頁面基本設定
+st.set_page_config(
+    page_title="全球金融戰情室",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-    # ==========================================
-    # 台股戰略 頁籤內容
-    # ==========================================
-    with tabs[1]:
-        st.subheader("🇹🇼 台股四大領先指標")
-        
-        # 建立 4 個欄位來放置指標
-        col1, col2, col3, col4 = st.columns(4)
-        
-        # delta_color="inverse" 會讓數值下跌呈現綠色、上漲呈現紅色 (符合台股習慣)
-        with col1:
-            st.metric(label="半導體 (SOXX)", value="268.1", delta="-9.32%", delta_color="inverse")
-        with col2:
-            st.metric(label="內資 (櫃買)", value="252.95", delta="-2.41%", delta_color="inverse")
-        with col3:
-            st.metric(label="美元 (源頭)", value="100.11", delta="0.5%", delta_color="inverse")
-        with col4:
-            st.metric(label="美債 (利率)", value="4.11%", delta="0.37%", delta_color="inverse")
-            
-        st.write("") # 增加一點留白
-        st.success("🌧️ 保守防禦 (0-1燈)")
+# 2. 標題與更新時間
+st.title("🌐 全球金融戰情室 (AI旗艦版)")
+st.caption("🕒 最後更新時間 (台灣): 2026-06-12 09:00:00")
+st.markdown("---")
 
-    # ==========================================
-    # AI 戰情 頁籤內容
-    # ==========================================
-    with tabs[0]:
-        st.subheader("💀 AI 資金掃描雷達")
-        st.info("💡 核心邏輯：當 Tech Index (納斯達克、費半、台股...) 的「平均離差」同步小於零，代表趨勢團結向下。")
+# 3. 建立導覽頁籤 (Tabs)
+tabs = st.tabs([
+    "💀 AI 戰情", 
+    "🇹🇼 台股戰略", 
+    "🚀 風險雷達", 
+    "💎 半導體雷達", 
+    "🔄 輪動策略", 
+    "🌐 資產配置", 
+    "📈 趨勢圖"
+])
+
+# ==========================================
+# 頁籤 0: AI 戰情 (照片截圖還原)
+# ==========================================
+with tabs[0]:
+    st.subheader("💀 AI 資金掃描雷達")
+    st.info("💡 核心邏輯：當 Tech Index (納斯達克、費半、台股...) 的「平均離差」同步小於零，代表趨勢團結向下。")
+    
+    col_left, col_right = st.columns([1, 2])
+    with col_left:
+        st.error("⚠️ 警報：全面翻負")
+        st.write("")
+        st.metric(label="Tech 平均離差", value="-6.55%", delta="-6.55", delta_color="inverse")
         
-        # 建立左右 1:2 的欄位佈局
-        col_left, col_right = st.columns([1, 2])
+    with col_right:
+        data = {
+            "名稱": ["納斯達克", "費城半導體", "台灣加權", "半導體ETF", "輝達"],
+            "狀態": ["🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢"],
+            "乖離率(%)": [-4.97, -9.03, -4.57, -7.65, -6.56],
+            "現價": [22078.05, 6352.07, 26434.94, 325.10, 180.64]
+        }
+        st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+
+# ==========================================
+# 頁籤 1: 台股戰略 (照片截圖還原)
+# ==========================================
+with tabs[1]:
+    st.subheader("🇹🇼 台股四大領先指標")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(label="半導體 (SOXX)", value="268.1", delta="-9.32%", delta_color="inverse")
+    with col2:
+        st.metric(label="內資 (櫃買)", value="252.95", delta="-2.41%", delta_color="inverse")
+    with col3:
+        st.metric(label="美元 (源頭)", value="100.11", delta="0.5%", delta_color="inverse")
+    with col4:
+        st.metric(label="美債 (利率)", value="4.11%", delta="0.37%", delta_color="inverse")
         
-        with col_left:
-            st.error("⚠️ 警報：全面翻負")
-            st.write("")
-            st.metric(label="Tech 平均離差", value="-6.55%", delta="-6.55", delta_color="inverse")
-            
-        with col_right:
-            data = {
-                "名稱": ["納斯達克", "費城半導體", "台灣加權", "半導體ETF", "輝達"],
-                "狀態": ["🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢"],
-                "乖離率(%)": [-4.97, -9.03, -4.57, -7.65, -6.56],
-                "現價": [22078.05, 6352.07, 26434.94, 325.10, 180.64]
-            }
-            df_ui = pd.DataFrame(data)
-            st.dataframe(df_ui, hide_index=True, use_container_width=True)
+    st.write("")
+    st.success("🌧️ 保守防禦 (0-1燈)")
+
+# ==========================================
+# 頁籤 2: 🚀 風險雷達 (新增內容)
+# ==========================================
+with tabs[2]:
+    st.subheader("🚀 總經與市場風險監控")
+    
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("VIX 恐慌指數", "18.5", "1.2", delta_color="inverse")
+        st.caption("數值 > 20 代表市場情緒恐慌")
+    with c2:
+        st.metric("台幣匯率 (USD/TWD)", "32.45", "-0.15", delta_color="inverse")
+        st.caption("外資動向的絕對源頭")
+    with c3:
+        st.metric("Put/Call Ratio", "112.4%", "5.2%", delta_color="normal")
+        st.caption("大盤期權多空力道比")
+        
+    st.divider()
+    st.warning("🚨 **系統判定：** 目前 VIX 處於相對低檔，但需留意匯率貶值帶來的外資提款壓力。")
+
+# ==========================================
+# 頁籤 3: 💎 半導體雷達 (新增內容)
+# ==========================================
+with tabs[3]:
+    st.subheader("💎 核心半導體產業鏈")
+    
+    semi_data = {
+        "標的": ["2330 台積電", "2454 聯發科", "NVDA 輝達", "ASML 艾司摩爾"],
+        "收盤價": [850, 1200, 125.5, 950.2],
+        "月線防守": ["✅ 站上", "⚠️ 跌破", "✅ 站上", "✅ 站上"],
+        "外資連買/賣": ["連買 3 天", "連賣 2 天", "連買 5 天", "連買 1 天"],
+        "動能評級": ["⭐⭐⭐⭐", "⭐⭐", "⭐⭐⭐⭐⭐", "⭐⭐⭐"]
+    }
+    st.dataframe(pd.DataFrame(semi_data), hide_index=True, use_container_width=True)
+
+# ==========================================
+# 頁籤 4: 🔄 輪動策略 (新增內容)
+# ==========================================
+with tabs[4]:
+    st.subheader("🔄 市場熱錢流向與輪動")
+    st.info("💡 找出資金正在進駐的板塊，不與趨勢作對。")
+    
+    # 建立虛擬的板塊資金流入數據
+    flow_data = pd.DataFrame({
+        "板塊": ["AI 伺服器", "散熱模組", "重電綠能", "金融保險", "航運"],
+        "淨流入(億)": [125.4, 85.2, -45.6, 20.1, -15.3]
+    }).set_index("板塊")
+    
+    # 使用 st.bar_chart 呈現資金流向
+    st.bar_chart(flow_data, color="#ffd166")
+
+# ==========================================
+# 頁籤 5: 🌐 資產配置 (新增內容)
+# ==========================================
+with tabs[5]:
+    st.subheader("🌐 當前建議資產水位")
+    
+    col_alloc1, col_alloc2 = st.columns([1, 1])
+    with col_alloc1:
+        st.write("### 資金水位建議")
+        st.progress(60, text="📈 股票部位：60% (目前屬偏多操作)")
+        st.progress(30, text="💵 現金部位：30% (保留加碼彈藥)")
+        st.progress(10, text="🛡️ 債券/避險：10%")
+        
+    with col_alloc2:
+        st.write("### 戰略指示")
+        st.markdown("""
+        * **加碼條件**：大盤站穩月線且量能 > 4000億。
+        * **減碼條件**：指標股 (如台積電) 跌破重要支撐。
+        * **紀律提醒**：絕對不向下攤平，嚴格執行停損。
+        """)
+
+# ==========================================
+# 頁籤 6: 📈 趨勢圖 (新增內容)
+# ==========================================
+with tabs[6]:
+    st.subheader("📈 大盤走勢模擬預覽")
+    
+    # 產生 30 天的隨機趨勢資料來模擬 K 線走勢
+    np.random.seed(42)
+    dates = pd.date_range(start='2026-05-01', periods=30)
+    prices = 21000 + np.random.randn(30).cumsum() * 150
+    
+    trend_df = pd.DataFrame({"加權指數模擬": prices}, index=dates)
+    
+    # 繪製折線圖
+    st.line_chart(trend_df, color="#00cc96")

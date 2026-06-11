@@ -873,6 +873,7 @@ st.sidebar.markdown("---")
 
 main_page = st.sidebar.radio("跳轉頁面", [
     "🎯 股神六星雷達系統", 
+    "🌐 全球金融戰情室", # <--- 全新整合的頁面
     "🏢 基本面與 AI 診斷", 
     "🕵️‍♂️ 00981A 經理人跟單雷達",
     "☠️ 隔日沖分點照妖鏡",
@@ -1278,7 +1279,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     if res:
                         star_dict[t] = res['星等']
                         price_dict[t] = res['收盤']
-                        warning_dict[t] = res.get('處置與籌碼風險', "✅ 安全")
+                        warning_dict[t] = res.get('處置與風險', "✅ 安全")
                     else:
                         star_dict[t] = "💤 盤整 (無星)"
                         price_dict[t] = fetch_fast_price(t)
@@ -1460,3 +1461,69 @@ elif main_page == "🚀 早盤渦輪截擊":
                     st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
                 else:
                     st.warning(f"👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。下次掃描時間：30秒後 (自動巡航啟動中)")
+
+# ==========================================
+# 分頁 6: 🌐 全球金融戰情室 (全新整合)
+# ==========================================
+elif main_page == "🌐 全球金融戰情室":
+    st.title("🌐 全球金融戰情室 (AI旗艦版)")
+    st.caption("🕒 最後更新時間 (台灣): 2025-11-21 15:36:17")
+    st.markdown("---")
+
+    # 建立導覽頁籤 (Tabs)
+    tabs = st.tabs([
+        "💀 AI 戰情", 
+        "🇹🇼 台股戰略", 
+        "🚀 風險雷達", 
+        "💎 半導體雷達", 
+        "🔄 輪動策略", 
+        "🌐 資產配置", 
+        "📈 趨勢圖"
+    ])
+
+    # ==========================================
+    # 台股戰略 頁籤內容
+    # ==========================================
+    with tabs[1]:
+        st.subheader("🇹🇼 台股四大領先指標")
+        
+        # 建立 4 個欄位來放置指標
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # delta_color="inverse" 會讓數值下跌呈現綠色、上漲呈現紅色 (符合台股習慣)
+        with col1:
+            st.metric(label="半導體 (SOXX)", value="268.1", delta="-9.32%", delta_color="inverse")
+        with col2:
+            st.metric(label="內資 (櫃買)", value="252.95", delta="-2.41%", delta_color="inverse")
+        with col3:
+            st.metric(label="美元 (源頭)", value="100.11", delta="0.5%", delta_color="inverse")
+        with col4:
+            st.metric(label="美債 (利率)", value="4.11%", delta="0.37%", delta_color="inverse")
+            
+        st.write("") # 增加一點留白
+        st.success("🌧️ 保守防禦 (0-1燈)")
+
+    # ==========================================
+    # AI 戰情 頁籤內容
+    # ==========================================
+    with tabs[0]:
+        st.subheader("💀 AI 資金掃描雷達")
+        st.info("💡 核心邏輯：當 Tech Index (納斯達克、費半、台股...) 的「平均離差」同步小於零，代表趨勢團結向下。")
+        
+        # 建立左右 1:2 的欄位佈局
+        col_left, col_right = st.columns([1, 2])
+        
+        with col_left:
+            st.error("⚠️ 警報：全面翻負")
+            st.write("")
+            st.metric(label="Tech 平均離差", value="-6.55%", delta="-6.55", delta_color="inverse")
+            
+        with col_right:
+            data = {
+                "名稱": ["納斯達克", "費城半導體", "台灣加權", "半導體ETF", "輝達"],
+                "狀態": ["🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢"],
+                "乖離率(%)": [-4.97, -9.03, -4.57, -7.65, -6.56],
+                "現價": [22078.05, 6352.07, 26434.94, 325.10, 180.64]
+            }
+            df_ui = pd.DataFrame(data)
+            st.dataframe(df_ui, hide_index=True, use_container_width=True)

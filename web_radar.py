@@ -64,7 +64,7 @@ DEFAULT_STOCKS = {
     "2618.TW": "長榮航", "2610.TW": "華航", "2606.TW": "裕民", "3596.TW": "智易",
     "5388.TWO": "中磊", "3380.TW": "明泰", "2345.TW": "智邦", "2881.TW": "富邦金",
     "2882.TW": "國泰金", "2891.TW": "中信金", "2886.TW": "兆豐金", "2884.TW": "玉山金",
-    "2892.TW": "第一金", "2880.TW": "華南金", "2885.元大金": "元大金", "2890.TW": "永豐金",
+    "2892.TW": "第一金", "2880.TW": "華南金", "2885.TW": "元大金", "2890.TW": "永豐金",
     "2883.TW": "開發金", "2887.TW": "台新金", "5880.TW": "合庫金", "8069.TWO": "元太",
     "3293.TWO": "鈊象", "8436.TW": "大江", "8441.TW": "可寧衛", "8390.TWO": "金益鼎",
     "0050.TW": "台50", "0056.TW": "高股息", "00878.TW": "永續", "00919.TW": "精選高息",
@@ -916,7 +916,7 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 # === 13. 側邊欄與大盤風向球 ===
-st.sidebar.title("📡 股神軍規操盤台")
+st.sidebar.title("📡 阿綜專屬：軍規操盤台")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
@@ -1064,7 +1064,7 @@ if main_page == "🎯 股神六星雷達系統":
                 st.warning("👀 目前沒有符合終極技術型態的飆股。")
 
     else:
-        st.title("📡 股神系統：四維共振・真・大滿配終極版")
+        st.title("📡 阿綜專屬：四維共振・真・大滿配終極版")
         
         t1, t_top, t2, t3, t4, t5, t6 = st.tabs([
             "🎯 六星雷達", "🔥 金流榜", "📈 VPVR", "🛡️ 部位診斷", "🚨 處置警戒", "🧪 策略回測", "🚀 終極飆股戰情室"
@@ -1105,7 +1105,7 @@ if main_page == "🎯 股神六星雷達系統":
                         card_html = f"""
                         <div style="background: linear-gradient(135deg, #111111, #1e1e1e); border: 3px solid #ffd166; padding: 25px; border-radius: 15px; width: 330px; height: 580px; margin: 20px auto; color: white; box-shadow: 0px 4px 20px rgba(0,0,0,0.8); font-family: Arial, sans-serif;">
                             <div style="text-align: center; border-bottom: 2px solid #ffd166; padding-bottom: 10px;">
-                                <h2 style="color: #ffd166; margin: 0; font-size: 22px; letter-spacing: 2px;">📡 究極軍規雷達</h2>
+                                <h2 style="color: #ffd166; margin: 0; font-size: 22px; letter-spacing: 2px;">📡 阿綜究極軍規雷達</h2>
                                 <span style="font-size: 11px; color: #888888;">每日實戰直擊 Shorts / Reels 卡面</span>
                             </div>
                             <div style="margin-top: 35px; text-align: center;">
@@ -1250,7 +1250,7 @@ if main_page == "🎯 股神六星雷達系統":
                         st.warning("請完整填寫工單代號、理由及大於0的停損防守價！")
                         
             if os.path.exists(MAINTENANCE_LOG_FILE):
-                st.caption("📁 歷史歷史交易保養紀錄表 (機密工單)")
+                st.caption("📁 歷史交易保養紀錄表 (機密工單)")
                 try:
                     df_history_logs = pd.read_csv(MAINTENANCE_LOG_FILE)
                     st.dataframe(df_history_logs.sort_index(ascending=False), use_container_width=True, hide_index=True)
@@ -1261,7 +1261,7 @@ if main_page == "🎯 股神六星雷達系統":
             c_moat1, c_moat2 = st.columns(2)
             with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="2317", key="moat_in")
             with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=274.0, step=1.0, key="moat_cost")
-            if st.button("🛡️ 啟護城河防守掃描", use_container_width=True):
+            if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
                 moat_data = analyze_dynamic_moat(moat_id, cost_p)
                 if moat_data:
                     current, support, cost = moat_data['current_price'], moat_data['support_price'], moat_data['cost_price']
@@ -1364,7 +1364,7 @@ if main_page == "🎯 股神六星雷達系統":
 # 分頁 2: 🌐 全球金融戰情室
 # ==========================================
 elif main_page == "🌐 全球金融戰情室":
-    st.title("🌐 全球金融戰情室 (AI旗艦版)")
+    st.title("🌐 阿綜專屬：全球金融戰情室 (AI旗艦版)")
     st.caption(f"🕒 最後更新時間 (台灣): {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     st.markdown("---")
 
@@ -1504,7 +1504,7 @@ elif main_page == "🤝 土洋主力共振雷達":
     
     # 【功能 4：防呆斷油機制】
     if is_bearish:
-        st.error("⛔ **【防呆限制】大盤目前環境風險極高**。即使土洋合買，逆勢操作的覆巢风险仍大，請務必搭配下方六星技術評等，非 5 星以上強勢股絕不盲動出手。")
+        st.error("⛔ **【防呆限制】大盤目前環境風險極高**。即使土洋合買，逆勢操作的覆巢風險仍大，請務必搭配下方六星技術評等，非 5 星以上強勢股絕不盲動出手。")
 
     if st.button("🚀 啟動全市場土洋籌碼共振掃描", type="primary", use_container_width=True):
         with st.spinner("📡 正在解析證交所與櫃買中心三大法人盤後籌碼動向..."):

@@ -1240,7 +1240,7 @@ if main_page == "🎯 股神六星雷達系統":
                 log_reason = st.text_input("💡 進場型態與理由 (例如：土洋共振+突破、老鴨頭回踩)", value="")
                 log_stop = st.number_input("🛡️ 確定的技術停損防守價", value=0.0, step=0.5)
                 log_mood = st.selectbox("🧠 當下進場心理狀態", ["✅ 理智機械化操作，無情緒", "⚠️ 有點急，害怕錯過行情抱恐慌", "❌ 盤中臨時起意衝動追高", "💤 測試小部位試單"])
-                submit_log = st.form_submit_with_button("💾 簽收並儲存保養工單")
+                submit_log = st.form_submit_button("💾 簽收並儲存保養工單")
                 
                 if submit_log:
                     if log_stock and log_reason and log_stop > 0:

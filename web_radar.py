@@ -1553,19 +1553,69 @@ with tabs[2]:
     st.warning("🚨 **系統判定：** 目前 VIX 處於相對低檔，但需留意匯率貶值帶來的外資提款壓力。")
 
 # ==========================================
-# 頁籤 3: 💎 半導體雷達 (新增內容)
-# ==========================================
-with tabs[3]:
-    st.subheader("💎 核心半導體產業鏈")
-    
-    semi_data = {
-        "標的": ["2330 台積電", "2454 聯發科", "NVDA 輝達", "ASML 艾司摩爾"],
-        "收盤價": [850, 1200, 125.5, 950.2],
-        "月線防守": ["✅ 站上", "⚠️ 跌破", "✅ 站上", "✅ 站上"],
-        "外資連買/賣": ["連買 3 天", "連賣 2 天", "連買 5 天", "連買 1 天"],
-        "動能評級": ["⭐⭐⭐⭐", "⭐⭐", "⭐⭐⭐⭐⭐", "⭐⭐⭐"]
-    }
-    st.dataframe(pd.DataFrame(semi_data), hide_index=True, use_container_width=True)
+    # 頁籤 3: 💎 半導體雷達 (真實連線版)
+    # ==========================================
+    with tabs[3]:
+        st.subheader("💎 核心半導體產業鏈 (即時報價與技術面)")
+        
+        # 建立專屬的快取抓取函數，避免每次切換頁籤都卡頓
+        @st.cache_data(ttl=300) 
+        def fetch_real_semi_data():
+            semi_tickers = {
+                "2330.TW": "2330 台積電", 
+                "2454.TW": "2454 聯發科", 
+                "NVDA": "NVDA 輝達", 
+                "ASML": "ASML 艾司摩爾",
+                "TSM": "台積電 ADR"
+            }
+            results = []
+            for tk, name in semi_tickers.items():
+                try:
+                    df = yf.Ticker(tk).history(period="1mo")
+                    if not df.empty and len(df) >= 20:
+                        df['MA20'] = df['Close'].rolling(20).mean()
+                        close_price = round(df['Close'].iloc[-1], 2)
+                        ma20 = df['MA20'].iloc[-1]
+                        
+                        # 判定是否站上月線
+                        status = "✅ 站上" if close_price > ma20 else "⚠️ 跌破"
+                        
+                        # 計算月線乖離率，並轉換為星等評級
+                        bias = ((close_price - ma20) / ma20) * 100
+                        if bias > 5: stars = "⭐⭐⭐⭐⭐"
+                        elif bias > 2: stars = "⭐⭐⭐⭐"
+                        elif bias > 0: stars = "⭐⭐⭐"
+                        elif bias > -2: stars = "⭐⭐"
+                        else: stars = "⭐"
+                        
+                        results.append({
+                            "標的": name,
+                            "最新收盤價": close_price,
+                            "月線防守 (20MA)": status,
+                            "月線乖離率(%)": round(bias, 2),
+                            "動能評級": stars
+                        })
+                    else:
+                        results.append({"標的": name, "最新收盤價": "---", "月線防守 (20MA)": "---", "月線乖離率(%)": "---", "動能評級": "---"})
+                except Exception:
+                    results.append({"標的": name, "最新收盤價": "Error", "月線防守 (20MA)": "Error", "月線乖離率(%)": "Error", "動能評級": "Error"})
+            
+            return pd.DataFrame(results)
+
+        # 顯示載入動畫與真實資料表
+        with st.spinner("⚡ 正在連線交易所抓取半導體最新報價..."):
+            semi_real_df = fetch_real_semi_data()
+            
+            # 使用自訂的欄位設定讓表格更美觀
+            st.dataframe(
+                semi_real_df, 
+                hide_index=True, 
+                use_container_width=True,
+                column_config={
+                    "最新收盤價": st.column_config.NumberColumn("最新收盤價", format="%.2f"),
+                    "月線乖離率(%)": st.column_config.NumberColumn("乖離率(%)", format="%.2f %%")
+                }
+            )
 
 # ==========================================
 # 頁籤 4: 🔄 輪動策略 (新增內容)

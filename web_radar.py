@@ -977,6 +977,16 @@ if main_page == "🎯 股神六星雷達系統":
     if is_bearish:
         st.error("⛔ **【系統防呆斷油機制已觸發】** 當前大盤處於偏空逆風環境。系統已自動鎖定高風險訊號，嚴防逆風做多遭假突破倒貨，建議極度縮小部位或觀望。")
     
+    # 💡 將完整心法提至最上方，確保手機與電腦版皆會顯示
+    st.markdown("### 🎯 買進策略：共振發動")
+    st.info("""
+    💡 **【系統操盤核心心法】**
+    1. **拒絕預測**：不要替股票算命，看懂「當下的架構」最重要。
+    2. **一眼定多空**：底底高、頭頭高就是多頭；只做多頭排列的股票，空頭連看都不要看！
+    3. **保護傘與紀律**：買進要有依據，賣出要有紀律。均線是保護傘，跌破關鍵支撐請嚴格停損。
+    4. **無情操盤**：操作要像機器人一樣，沒有情緒。不摸底、不猜頭，訊號來了就買，破了就走。
+    """)
+
     if mobile_mode:
         st.title("📱 戰鬥儀表板")
         st.info("⚡ **極簡模式啟動**：只顯示最高風險與最強訊號。")
@@ -1019,6 +1029,7 @@ if main_page == "🎯 股神六星雷達系統":
                 df_res.insert(0, '名次', df_res.index + 1)
                 
                 for _, row in df_res.iterrows():
+                    # 🔧 修復：加回手機版卡片的量能與觸發條件（底底高、熱門股）
                     st.markdown(f"""
                     <div style='background-color:#1E1E1E; padding:15px; border-radius:10px; margin-bottom:12px; border-left: 5px solid #ffd166; box-shadow: 2px 2px 5px rgba(0,0,0,0.5);'>
                         <h4 style='margin:0; color:#ffd166; font-size:18px;'>
@@ -1026,7 +1037,11 @@ if main_page == "🎯 股神六星雷達系統":
                             <span style='font-size:22px; text-shadow: 0px 0px 8px #FFD700;'>{row['星等']}</span>
                         </h4>
                         <p style='margin:8px 0 5px 0; font-size:16px; color:#FFFFFF;'>
-                            收盤：<b style='color:#00cc96; font-size:18px;'>{row['收盤']}</b>
+                            收盤：<b style='color:#00cc96; font-size:18px;'>{row['收盤']}</b> ｜ 
+                            量能：<b style='color:#00cc96; font-size:18px;'>{row['今日量(張)']}</b> <span style='font-size:14px; color:#CCCCCC;'>千張</span>
+                        </p>
+                        <p style='margin:0; font-size:14px; color:#FFFFFF;'>
+                            條件：<span style='color:#ffd166;'>{row['觸發條件']}</span>
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1058,6 +1073,9 @@ if main_page == "🎯 股神六星雷達系統":
                             收盤價：<b style='color:#00cc96; font-size:18px;'>{r['即時收盤價']}</b> ｜ 
                             數據監測：<b style='color:#ffd166; font-size:18px;'>{r['關鍵數據']}</b>
                         </p>
+                        <p style='margin:0; font-size:14px; color:#FFFFFF;'>
+                            動能指標：<span>{r['均量倍數']}</span> ｜ {r['籌碼狀態']} ｜ <b>{r['戰鬥評價']}</b>
+                        </p>
                     </div>
                     """, unsafe_allow_html=True)
             else:
@@ -1071,9 +1089,6 @@ if main_page == "🎯 股神六星雷達系統":
         ])
         
         with t1:
-            st.markdown("### 🎯 買進策略：共振發動")
-            st.info("💡 **【系統操盤核心心法】** 拒絕預測，看懂當下架構。只做多頭排列，跌破支撐嚴格停損，像機器人一樣無情操作。")
-            
             # 【功能 1：短影音視覺化戰報按鈕】
             st.subheader("📸 社群媒體短影音工具")
             show_card = st.checkbox("📸 開啟 9:16 短影音戰報卡片面板", value=False)

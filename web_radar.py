@@ -277,7 +277,7 @@ def fetch_top15_ranking():
                     df = pd.DataFrame(t['data'], columns=t['fields'])
                     df['v'] = pd.to_numeric(df['成交金額'].str.replace(',',''), errors='coerce')
                     if not df.empty and df['v'].sum() > 0:
-                        df_sorted = df.sort_values('v', ascending=False).head(15)[['證券代號', '證券名稱', '收盤價', 'v']]
+                        df_sorted = df.sort_values('v', ascending=False).head(30)[['證券代號', '證券名稱', '收盤價', 'v']]
                         df_sorted.columns = ['證券代號', '證券名稱', '收盤價', '成交金額']
                         return df_sorted
         return pd.DataFrame()
@@ -292,7 +292,7 @@ def fetch_top15_ranking():
             cv = 9 if df.shape[1] >= 10 else df.shape[1] - 2
             df['v'] = pd.to_numeric(df[cv].astype(str).str.replace(',',''), errors='coerce')
             if not df.empty and df['v'].sum() > 0:
-                df_sorted = df.sort_values('v', ascending=False).head(15)[[0, 1, 2, 'v']]
+                df_sorted = df.sort_values('v', ascending=False).head(30)[[0, 1, 2, 'v']]
                 df_sorted.columns = ['證券代號', '證券名稱', '收盤價', '成交金額']
                 return df_sorted
         return pd.DataFrame()
@@ -440,6 +440,56 @@ def get_inst_data():
             for d in r2['aaData']: inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
     except: pass
     return inst_map
+
+@st.cache_data(ttl=3600)
+def fetch_co_buying_radar():
+    co_buy_list = []
+    try:
+        # 1. 抓取上市 (TWSE) 籌碼
+        url_twse = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
+        res_twse = safe_get_json(url_twse, HEADERS)
+        if 'data' in res_twse and 'fields' in res_twse:
+            fields = res_twse['fields']
+            idx_code = fields.index("證券代號") if "證券代號" in fields else 0
+            idx_name = fields.index("證券名稱") if "證券名稱" in fields else 1
+            # 動態尋找買賣超欄位，避免 API 變更
+            idx_foreign = next((i for i, f in enumerate(fields) if "外陸資買賣超" in f), 4)
+            idx_trust = next((i for i, f in enumerate(fields) if "投信買賣超" in f), 10)
+            
+            for d in res_twse['data']:
+                try:
+                    f_net = int(str(d[idx_foreign]).replace(',', '')) // 1000  # 換算為張數
+                    t_net = int(str(d[idx_trust]).replace(',', '')) // 1000
+                    if f_net > 0 and t_net > 0:  # 條件：外資與投信皆為淨買超
+                        co_buy_list.append({
+                            "代號": d[idx_code].strip(), "名稱": d[idx_name].strip(), 
+                            "外資買賣超(張)": f_net, "投信買賣超(張)": t_net, "市場": "上市"
+                        })
+                except: pass
+
+        # 2. 抓取上櫃 (TPEx) 籌碼
+        url_tpex = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
+        res_tpex = safe_get_json(url_tpex, HEADERS)
+        if 'aaData' in res_tpex:
+            for d in res_tpex['aaData']:
+                try:
+                    # 櫃買固定格式: 0代號, 1名稱, 4外資買賣超, 7投信買賣超
+                    f_net = int(str(d[4]).replace(',', '')) // 1000
+                    t_net = int(str(d[7]).replace(',', '')) // 1000
+                    if f_net > 0 and t_net > 0:
+                        co_buy_list.append({
+                            "代號": d[0].strip(), "名稱": d[1].strip(), 
+                            "外資買賣超(張)": f_net, "投信買賣超(張)": t_net, "市場": "上櫃"
+                        })
+                except: pass
+    except Exception:
+        pass
+    
+    df = pd.DataFrame(co_buy_list)
+    if not df.empty:
+        df['合計買超(張)'] = df['外資買賣超(張)'] + df['投信買賣超(張)']
+        df = df.sort_values(by='合計買超(張)', ascending=False).reset_index(drop=True)
+    return df
 
 # === 10. 雷達與各項診斷圖表邏輯 ===
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
@@ -873,7 +923,8 @@ st.sidebar.markdown("---")
 
 main_page = st.sidebar.radio("跳轉頁面", [
     "🎯 股神六星雷達系統", 
-    "🌐 全球金融戰情室", # <--- 全新整合的頁面
+    "🌐 全球金融戰情室",
+    "🤝 土洋主力共振雷達", 
     "🏢 基本面與 AI 診斷", 
     "🕵️‍♂️ 00981A 經理人跟單雷達",
     "☠️ 隔日沖分點照妖鏡",
@@ -1229,7 +1280,276 @@ if main_page == "🎯 股神六星雷達系統":
                     st.warning("👀 目前盤面自選庫沒有符合「雙核心型態」的飆股。操作如修車，沒壞就不用亂拆，訊號不到絕不盲目出手！")
 
 # ==========================================
-# 分頁 2: 🏢 基本面與 AI 診斷
+# 分頁 2: 🌐 全球金融戰情室 (全新整合)
+# ==========================================
+elif main_page == "🌐 全球金融戰情室":
+    st.title("🌐 全球金融戰情室 (AI旗艦版)")
+    st.caption(f"🕒 最後更新時間 (台灣): {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.markdown("---")
+
+    # 建立導覽頁籤 (Tabs)
+    tabs = st.tabs([
+        "💀 AI 戰情", 
+        "🇹🇼 台股戰略", 
+        "🚀 風險雷達", 
+        "💎 半導體雷達", 
+        "🔄 輪動策略", 
+        "🌐 資產配置", 
+        "📈 趨勢圖"
+    ])
+
+    # ==========================================
+    # AI 戰情 頁籤內容
+    # ==========================================
+    with tabs[0]:
+        st.subheader("💀 AI 資金掃描雷達")
+        st.info("💡 核心邏輯：當 Tech Index (納斯達克、費半、台股...) 的「平均離差」同步小於零，代表趨勢團結向下。")
+        
+        col_left, col_right = st.columns([1, 2])
+        
+        with col_left:
+            st.error("⚠️ 警報：全面翻負")
+            st.write("")
+            st.metric(label="Tech 平均離差", value="-6.55%", delta="-6.55", delta_color="inverse")
+            
+        with col_right:
+            data = {
+                "名稱": ["納斯達克", "費城半導體", "台灣加權", "半導體ETF", "輝達"],
+                "狀態": ["🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢"],
+                "乖離率(%)": [-4.97, -9.03, -4.57, -7.65, -6.56],
+                "現價": [22078.05, 6352.07, 26434.94, 325.10, 180.64]
+            }
+            df_ui = pd.DataFrame(data)
+            st.dataframe(df_ui, hide_index=True, use_container_width=True)
+
+    # ==========================================
+    # 台股戰略 頁籤內容
+    # ==========================================
+    with tabs[1]:
+        st.subheader("🇹🇼 台股四大領先指標")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric(label="半導體 (SOXX)", value="268.1", delta="-9.32%", delta_color="inverse")
+        with col2:
+            st.metric(label="內資 (櫃買)", value="252.95", delta="-2.41%", delta_color="inverse")
+        with col3:
+            st.metric(label="美元 (源頭)", value="100.11", delta="0.5%", delta_color="inverse")
+        with col4:
+            st.metric(label="美債 (利率)", value="4.11%", delta="0.37%", delta_color="inverse")
+            
+        st.write("")
+        st.success("🌧️ 保守防禦 (0-1燈)")
+
+    # ==========================================
+    # 風險雷達 頁籤內容
+    # ==========================================
+    with tabs[2]:
+        st.subheader("🚀 總經與市場風險監控")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("VIX 恐慌指數", "18.5", "1.2", delta_color="inverse")
+            st.caption("數值 > 20 代表市場情緒恐慌")
+        with c2:
+            st.metric("台幣匯率 (USD/TWD)", "32.45", "-0.15", delta_color="inverse")
+            st.caption("外資動向的絕對源頭")
+        with c3:
+            st.metric("Put/Call Ratio", "112.4%", "5.2%", delta_color="normal")
+            st.caption("大盤期權多空力道比")
+            
+        st.divider()
+        st.warning("🚨 **系統判定：** 目前 VIX 處於相對低檔，但需留意匯率貶值帶來的外資提款壓力。")
+
+    # ==========================================
+    # 半導體雷達 頁籤內容 (真實連線版)
+    # ==========================================
+    with tabs[3]:
+        st.subheader("💎 核心半導體產業鏈 (即時報價與技術面)")
+        
+        @st.cache_data(ttl=300) 
+        def fetch_real_semi_data():
+            semi_tickers = {
+                "2330.TW": "2330 台積電", 
+                "2454.TW": "2454 聯發科", 
+                "NVDA": "NVDA 輝達", 
+                "ASML": "ASML 艾司摩爾",
+                "TSM": "台積電 ADR"
+            }
+            results = []
+            for tk, name in semi_tickers.items():
+                try:
+                    df = yf.Ticker(tk).history(period="1mo")
+                    if not df.empty and len(df) >= 20:
+                        df['MA20'] = df['Close'].rolling(20).mean()
+                        close_price = round(df['Close'].iloc[-1], 2)
+                        ma20 = df['MA20'].iloc[-1]
+                        
+                        status = "✅ 站上" if close_price > ma20 else "⚠️ 跌破"
+                        bias = ((close_price - ma20) / ma20) * 100
+                        if bias > 5: stars = "⭐⭐⭐⭐⭐"
+                        elif bias > 2: stars = "⭐⭐⭐⭐"
+                        elif bias > 0: stars = "⭐⭐⭐"
+                        elif bias > -2: stars = "⭐⭐"
+                        else: stars = "⭐"
+                        
+                        results.append({
+                            "標的": name,
+                            "最新收盤價": close_price,
+                            "月線防守 (20MA)": status,
+                            "月線乖離率(%)": round(bias, 2),
+                            "動能評級": stars
+                        })
+                    else:
+                        results.append({"標的": name, "最新收盤價": "---", "月線防守 (20MA)": "---", "月線乖離率(%)": "---", "動能評級": "---"})
+                except Exception:
+                    results.append({"標的": name, "最新收盤價": "Error", "月線防守 (20MA)": "Error", "月線乖離率(%)": "Error", "動能評級": "Error"})
+            
+            return pd.DataFrame(results)
+
+        with st.spinner("⚡ 正在連線交易所抓取半導體最新報價..."):
+            semi_real_df = fetch_real_semi_data()
+            st.dataframe(
+                semi_real_df, 
+                hide_index=True, 
+                use_container_width=True,
+                column_config={
+                    "最新收盤價": st.column_config.NumberColumn("最新收盤價", format="%.2f"),
+                    "月線乖離率(%)": st.column_config.NumberColumn("乖離率(%)", format="%.2f %%")
+                }
+            )
+
+    # ==========================================
+    # 輪動策略 頁籤內容 (真實金流版)
+    # ==========================================
+    with tabs[4]:
+        st.subheader("🔄 市場熱錢流向與輪動 (真實即時數據)")
+        st.info("💡 統計全市場成交值前30大標的，透視當前資金正湧入哪些核心板塊。")
+        
+        with st.spinner("計算資金流向中..."):
+            tse_df, otc_df = fetch_top15_ranking()
+            if not tse_df.empty or not otc_df.empty:
+                combined_top = pd.concat([tse_df, otc_df], ignore_index=True)
+                combined_top['代號乾淨'] = combined_top['證券代號'].astype(str).str.strip()
+                combined_top['產業族群'] = combined_top['代號乾淨'].map(SECTOR_MAP).fillna("🔥 活躍熱門股")
+                combined_top['成交億'] = (combined_top['成交金額'] / 100000000).round(1)
+                
+                sector_flow = combined_top.groupby('產業族群')['成交億'].sum().reset_index()
+                sector_flow = sector_flow.sort_values(by='成交億', ascending=False).set_index("產業族群")
+                
+                st.bar_chart(sector_flow, color="#ffd166")
+                
+                top_sector = sector_flow.index[0]
+                st.success(f"🎯 **主升段金流鎖定**：目前全市場最強吸金板塊為 **【{top_sector}】**！操作應順勢而為。")
+            else:
+                st.warning("目前無足夠的盤後交易數據可供計算資金流向。")
+
+    # ==========================================
+    # 資產配置 頁籤內容
+    # ==========================================
+    with tabs[5]:
+        st.subheader("🌐 當前建議資產水位")
+        col_alloc1, col_alloc2 = st.columns([1, 1])
+        with col_alloc1:
+            st.write("### 資金水位建議")
+            st.progress(60, text="📈 股票部位：60% (目前屬偏多操作)")
+            st.progress(30, text="💵 現金部位：30% (保留加碼彈藥)")
+            st.progress(10, text="🛡️ 債券/避險：10%")
+            
+        with col_alloc2:
+            st.write("### 戰略指示")
+            st.markdown("""
+            * **加碼條件**：大盤站穩月線且量能 > 4000億。
+            * **減碼條件**：指標股 (如台積電) 跌破重要支撐。
+            * **紀律提醒**：絕對不向下攤平，嚴格執行停損。
+            """)
+
+    # ==========================================
+    # 趨勢圖 頁籤內容 (真實加權指數版)
+    # ==========================================
+    with tabs[6]:
+        st.subheader("📈 台灣加權指數 (^TWII) 真實趨勢與 KD 動能")
+        
+        with st.spinner("繪製真實大盤 K 線中..."):
+            twii_df = yf.Ticker("^TWII").history(period="4mo")
+            if not twii_df.empty:
+                twii_df['MA20'] = twii_df['Close'].rolling(20).mean()
+                twii_df = calculate_kd(twii_df) 
+                
+                twii_df = twii_df.tail(60) 
+                
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+                
+                fig.add_trace(go.Candlestick(x=twii_df.index, open=twii_df['Open'], high=twii_df['High'], low=twii_df['Low'], close=twii_df['Close'], name='加權指數'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['MA20'], line=dict(color='orange', width=2), name='月線 (20MA)'), row=1, col=1)
+                
+                fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['K'], line=dict(color='yellow', width=1.5), name='K值'), row=2, col=1)
+                fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['D'], line=dict(color='cyan', width=1.5), name='D值'), row=2, col=1)
+                
+                fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+                
+                c_price = twii_df['Close'].iloc[-1]
+                c_ma20 = twii_df['MA20'].iloc[-1]
+                if c_price > c_ma20:
+                    st.info("💡 **大盤防護網狀態**：目前加權指數站穩月線，大部隊處於安全防護範圍，個股可偏多操作。")
+                else:
+                    st.error("⚠️ **大盤破線警報**：加權指數跌破月線，系統建議縮小資金部位，嚴格控管風險！")
+            else:
+                st.warning("無法取得大盤資料。")
+
+# ==========================================
+# 分頁 3: 🤝 土洋主力共振雷達 (全新外資投信追蹤)
+# ==========================================
+elif main_page == "🤝 土洋主力共振雷達":
+    st.title("🤝 土洋主力共振雷達 (籌碼深度追蹤)")
+    st.info("💡 **戰術核心**：此雷達專門透視全台股，鎖定今日【外資機構】與【本土投信】同步重壓買超的標的。當兩大法人在籌碼上產生共振，往往是波段主升段的發動起點。")
+    
+    if st.button("🚀 啟動全市場土洋籌碼掃描", type="primary", use_container_width=True):
+        with st.spinner("📡 正在深潛證交所與櫃買中心，解析三大法人盤後籌碼動向..."):
+            co_buy_df = fetch_co_buying_radar()
+            
+            if not co_buy_df.empty:
+                st.success(f"🎯 掃描完畢！今日共有 **{len(co_buy_df)}** 檔標的出現土洋合買訊號！")
+                
+                # 自動套用你的六星戰力技術面健檢
+                with st.spinner("🧠 正在為籌碼達標個股進行『六星技術面』交叉比對..."):
+                    hot_ids = set(co_buy_df['代號'].tolist())
+                    full_ids = [f"{t}.TW" if len(t)==4 else f"{t}.TWO" for t in hot_ids] # 簡化後綴處理
+                    bulk_data = fetch_bulk_yf_data(full_ids, period="3mo")
+                    inst_map = get_inst_data()
+                    
+                    tech_results = {}
+                    with ThreadPoolExecutor(max_workers=5) as ex:
+                        futs = {}
+                        for t in hot_ids:
+                            t_full = f"{t}.TW" if len(t)==4 else f"{t}.TWO"
+                            if t_full in bulk_data:
+                                futs[ex.submit(analyze_stock_score_v2, t, bulk_data[t_full], t_full, inst_map, hot_ids)] = t
+                        for f in as_completed(futs):
+                            res = f.result()
+                            if res: tech_results[futs[f]] = res['星等']
+                            
+                co_buy_df['技術面星等'] = co_buy_df['代號'].map(tech_results).fillna("💤 盤整/無資料")
+                co_buy_df.insert(0, '名次', co_buy_df.index + 1)
+                
+                def highlight_co_buy(val):
+                    if isinstance(val, str) and '🌟' in val:
+                        return 'color: #ffd166; font-weight: bold'
+                    return ''
+                
+                st.dataframe(
+                    co_buy_df.style.map(highlight_co_buy, subset=['技術面星等']), 
+                    use_container_width=True, hide_index=True, height=600,
+                    column_config={
+                        "合計買超(張)": st.column_config.NumberColumn("合計買超(張)", format="%d 張"),
+                        "外資買賣超(張)": st.column_config.NumberColumn("外資買進", format="%d 張"),
+                        "投信買賣超(張)": st.column_config.NumberColumn("投信買進", format="%d 張")
+                    }
+                )
+            else:
+                st.warning("👀 今日全市場沒有出現外資與投信同步大量買超的標的，或證交所盤後籌碼尚未更新 (通常於每日下午 15:30 後更新)。")
+
+# ==========================================
+# 分頁 4: 🏢 基本面與 AI 診斷
 # ==========================================
 elif main_page == "🏢 基本面與 AI 診斷":
     st.title("🏢 基本面濾網與 AI 財報新聞分析")
@@ -1247,7 +1567,7 @@ elif main_page == "🏢 基本面與 AI 診斷":
             st.info(ai_report)
 
 # ==========================================
-# 分頁 3: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 5: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")
@@ -1349,7 +1669,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     else: st.warning("目前尚未收集到足夠的歷史資料，或今日 API 獲取失敗。")
 
 # ==========================================
-# 分頁 4: ☠️ 隔日沖分點照妖鏡
+# 分頁 6: ☠️ 隔日沖分點照妖鏡
 # ==========================================
 elif main_page == "☠️ 隔日沖分點照妖鏡":
     st.title("☠️ 隔日沖分點照妖鏡 (主力追蹤網)")
@@ -1400,7 +1720,7 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
             else: st.warning(f"目前沒有找到 {target_id} 的分點資料。")
 
 # ==========================================
-# 分頁 5: 🚀 早盤渦輪截擊 (V12 雙渦輪非同步版 + 自動巡航)
+# 分頁 7: 🚀 早盤渦輪截擊 (V12 雙渦輪非同步版 + 自動巡航)
 # ==========================================
 elif main_page == "🚀 早盤渦輪截擊":
     st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")
@@ -1461,211 +1781,3 @@ elif main_page == "🚀 早盤渦輪截擊":
                     st.error("❌ 測試模式下依然沒有任何資料，可能是 Fugle API 額度用盡或遇到連線阻擋！")
                 else:
                     st.warning(f"👀 目前盤面沒有符合「跳空 > 2% 且即時漲幅 > 2%」的強勢標的。下次掃描時間：30秒後 (自動巡航啟動中)")
-
-# ==========================================
-# 分頁 6: 🌐 全球金融戰情室 (全新整合)
-# ==========================================
-import streamlit as st
-import pandas as pd
-import numpy as np
-
-# 1. 頁面基本設定
-st.set_page_config(
-    page_title="全球金融戰情室",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-# 2. 標題與更新時間
-st.title("🌐 全球金融戰情室 (AI旗艦版)")
-st.caption("🕒 最後更新時間 (台灣): 2026-06-12 09:00:00")
-st.markdown("---")
-
-# 3. 建立導覽頁籤 (Tabs)
-tabs = st.tabs([
-    "💀 AI 戰情", 
-    "🇹🇼 台股戰略", 
-    "🚀 風險雷達", 
-    "💎 半導體雷達", 
-    "🔄 輪動策略", 
-    "🌐 資產配置", 
-    "📈 趨勢圖"
-])
-
-# ==========================================
-# 頁籤 0: AI 戰情 (照片截圖還原)
-# ==========================================
-with tabs[0]:
-    st.subheader("💀 AI 資金掃描雷達")
-    st.info("💡 核心邏輯：當 Tech Index (納斯達克、費半、台股...) 的「平均離差」同步小於零，代表趨勢團結向下。")
-    
-    col_left, col_right = st.columns([1, 2])
-    with col_left:
-        st.error("⚠️ 警報：全面翻負")
-        st.write("")
-        st.metric(label="Tech 平均離差", value="-6.55%", delta="-6.55", delta_color="inverse")
-        
-    with col_right:
-        data = {
-            "名稱": ["納斯達克", "費城半導體", "台灣加權", "半導體ETF", "輝達"],
-            "狀態": ["🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢", "🟢 弱勢"],
-            "乖離率(%)": [-4.97, -9.03, -4.57, -7.65, -6.56],
-            "現價": [22078.05, 6352.07, 26434.94, 325.10, 180.64]
-        }
-        st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
-
-# ==========================================
-# 頁籤 1: 台股戰略 (照片截圖還原)
-# ==========================================
-with tabs[1]:
-    st.subheader("🇹🇼 台股四大領先指標")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric(label="半導體 (SOXX)", value="268.1", delta="-9.32%", delta_color="inverse")
-    with col2:
-        st.metric(label="內資 (櫃買)", value="252.95", delta="-2.41%", delta_color="inverse")
-    with col3:
-        st.metric(label="美元 (源頭)", value="100.11", delta="0.5%", delta_color="inverse")
-    with col4:
-        st.metric(label="美債 (利率)", value="4.11%", delta="0.37%", delta_color="inverse")
-        
-    st.write("")
-    st.success("🌧️ 保守防禦 (0-1燈)")
-
-# ==========================================
-# 頁籤 2: 🚀 風險雷達 (新增內容)
-# ==========================================
-with tabs[2]:
-    st.subheader("🚀 總經與市場風險監控")
-    
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("VIX 恐慌指數", "18.5", "1.2", delta_color="inverse")
-        st.caption("數值 > 20 代表市場情緒恐慌")
-    with c2:
-        st.metric("台幣匯率 (USD/TWD)", "32.45", "-0.15", delta_color="inverse")
-        st.caption("外資動向的絕對源頭")
-    with c3:
-        st.metric("Put/Call Ratio", "112.4%", "5.2%", delta_color="normal")
-        st.caption("大盤期權多空力道比")
-        
-    st.divider()
-    st.warning("🚨 **系統判定：** 目前 VIX 處於相對低檔，但需留意匯率貶值帶來的外資提款壓力。")
-
-# ==========================================
-    # 頁籤 3: 💎 半導體雷達 (真實連線版)
-    # ==========================================
-    with tabs[3]:
-        st.subheader("💎 核心半導體產業鏈 (即時報價與技術面)")
-        
-        # 建立專屬的快取抓取函數，避免每次切換頁籤都卡頓
-        @st.cache_data(ttl=300) 
-        def fetch_real_semi_data():
-            semi_tickers = {
-                "2330.TW": "2330 台積電", 
-                "2454.TW": "2454 聯發科", 
-                "NVDA": "NVDA 輝達", 
-                "ASML": "ASML 艾司摩爾",
-                "TSM": "台積電 ADR"
-            }
-            results = []
-            for tk, name in semi_tickers.items():
-                try:
-                    df = yf.Ticker(tk).history(period="1mo")
-                    if not df.empty and len(df) >= 20:
-                        df['MA20'] = df['Close'].rolling(20).mean()
-                        close_price = round(df['Close'].iloc[-1], 2)
-                        ma20 = df['MA20'].iloc[-1]
-                        
-                        # 判定是否站上月線
-                        status = "✅ 站上" if close_price > ma20 else "⚠️ 跌破"
-                        
-                        # 計算月線乖離率，並轉換為星等評級
-                        bias = ((close_price - ma20) / ma20) * 100
-                        if bias > 5: stars = "⭐⭐⭐⭐⭐"
-                        elif bias > 2: stars = "⭐⭐⭐⭐"
-                        elif bias > 0: stars = "⭐⭐⭐"
-                        elif bias > -2: stars = "⭐⭐"
-                        else: stars = "⭐"
-                        
-                        results.append({
-                            "標的": name,
-                            "最新收盤價": close_price,
-                            "月線防守 (20MA)": status,
-                            "月線乖離率(%)": round(bias, 2),
-                            "動能評級": stars
-                        })
-                    else:
-                        results.append({"標的": name, "最新收盤價": "---", "月線防守 (20MA)": "---", "月線乖離率(%)": "---", "動能評級": "---"})
-                except Exception:
-                    results.append({"標的": name, "最新收盤價": "Error", "月線防守 (20MA)": "Error", "月線乖離率(%)": "Error", "動能評級": "Error"})
-            
-            return pd.DataFrame(results)
-
-        # 顯示載入動畫與真實資料表
-        with st.spinner("⚡ 正在連線交易所抓取半導體最新報價..."):
-            semi_real_df = fetch_real_semi_data()
-            
-            # 使用自訂的欄位設定讓表格更美觀
-            st.dataframe(
-                semi_real_df, 
-                hide_index=True, 
-                use_container_width=True,
-                column_config={
-                    "最新收盤價": st.column_config.NumberColumn("最新收盤價", format="%.2f"),
-                    "月線乖離率(%)": st.column_config.NumberColumn("乖離率(%)", format="%.2f %%")
-                }
-            )
-
-# ==========================================
-# 頁籤 4: 🔄 輪動策略 (新增內容)
-# ==========================================
-with tabs[4]:
-    st.subheader("🔄 市場熱錢流向與輪動")
-    st.info("💡 找出資金正在進駐的板塊，不與趨勢作對。")
-    
-    # 建立虛擬的板塊資金流入數據
-    flow_data = pd.DataFrame({
-        "板塊": ["AI 伺服器", "散熱模組", "重電綠能", "金融保險", "航運"],
-        "淨流入(億)": [125.4, 85.2, -45.6, 20.1, -15.3]
-    }).set_index("板塊")
-    
-    # 使用 st.bar_chart 呈現資金流向
-    st.bar_chart(flow_data, color="#ffd166")
-
-# ==========================================
-# 頁籤 5: 🌐 資產配置 (新增內容)
-# ==========================================
-with tabs[5]:
-    st.subheader("🌐 當前建議資產水位")
-    
-    col_alloc1, col_alloc2 = st.columns([1, 1])
-    with col_alloc1:
-        st.write("### 資金水位建議")
-        st.progress(60, text="📈 股票部位：60% (目前屬偏多操作)")
-        st.progress(30, text="💵 現金部位：30% (保留加碼彈藥)")
-        st.progress(10, text="🛡️ 債券/避險：10%")
-        
-    with col_alloc2:
-        st.write("### 戰略指示")
-        st.markdown("""
-        * **加碼條件**：大盤站穩月線且量能 > 4000億。
-        * **減碼條件**：指標股 (如台積電) 跌破重要支撐。
-        * **紀律提醒**：絕對不向下攤平，嚴格執行停損。
-        """)
-
-# ==========================================
-# 頁籤 6: 📈 趨勢圖 (新增內容)
-# ==========================================
-with tabs[6]:
-    st.subheader("📈 大盤走勢模擬預覽")
-    
-    # 產生 30 天的隨機趨勢資料來模擬 K 線走勢
-    np.random.seed(42)
-    dates = pd.date_range(start='2026-05-01', periods=30)
-    prices = 21000 + np.random.randn(30).cumsum() * 150
-    
-    trend_df = pd.DataFrame({"加權指數模擬": prices}, index=dates)
-    
-    # 繪製折線圖
-    st.line_chart(trend_df, color="#00cc96")

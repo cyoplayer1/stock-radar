@@ -210,7 +210,7 @@ def get_market_breadth():
 def us_market_brain():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌐 美股連動觀測")
-    us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)"}
+    us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)", "SPCX": "馬斯克 (SPCX)"}
     
     for ticker, name in us_tickers.items():
         try:

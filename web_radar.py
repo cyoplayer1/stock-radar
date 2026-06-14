@@ -1538,6 +1538,38 @@ elif main_page == "🌐 全球金融戰情室":
             st.caption("說明：台灣出口數據高度即時，為全球科技趨勢與美股財報的領先指標。")
             
         st.divider()
+        
+        col_chart_inv, col_chart_exp = st.columns(2)
+        
+        with col_chart_inv:
+            st.markdown("#### 📊 半導體大廠存貨週轉趨勢 (季度)")
+            # 建立季度庫存模擬數據 (反映文字描述的趨勢)
+            inv_df = pd.DataFrame({
+                "季度": ["25Q1", "25Q2", "25Q3", "25Q4", "26Q1"],
+                "AI 核心大廠": [85, 80, 78, 75, 74.25],
+                "記憶體大廠": [98, 102, 108, 112, 114.15],
+                "消費性電子": [110, 115, 118, 121, 123.67]
+            })
+            inv_melted = inv_df.melt(id_vars="季度", var_name="板塊", value_name="週轉天數")
+            fig_inv = px.bar(inv_melted, x="季度", y="週轉天數", color="板塊", barmode="group", color_discrete_sequence=['#ff4b4b', '#ffd166', '#00cc96'])
+            fig_inv.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            st.plotly_chart(fig_inv, use_container_width=True)
+            
+        with col_chart_exp:
+            st.markdown("#### 📊 台灣單月出口總額與年增率 (月度)")
+            # 建立月度出口模擬數據
+            exp_df = pd.DataFrame({
+                "月份": ["25/12", "26/01", "26/02", "26/03", "26/04", "26/05"],
+                "出口總額": [650, 680, 630, 720, 750, 784.79],
+                "年增率": [25.4, 30.1, 28.5, 38.2, 47.9, 51.68]
+            })
+            fig_exp = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_exp.add_trace(go.Bar(x=exp_df["月份"], y=exp_df["出口總額"], name="出口值(億)", marker_color="#00cc96"), secondary_y=False)
+            fig_exp.add_trace(go.Scatter(x=exp_df["月份"], y=exp_df["年增率"], name="YoY(%)", line=dict(color="#ffd166", width=3)), secondary_y=True)
+            fig_exp.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            st.plotly_chart(fig_exp, use_container_width=True)
+
+        st.divider()
         st.markdown("#### 🤖 綜合診斷結果")
         st.success("✅ **【無泡沫破裂跡象】** 目前 AI 核心大廠庫存遠低於傳統消費性電子，處於「供不應求」的狀態；且台灣出口受 AI 伺服器與 CSP 資本支出帶動，持續維持高檔年增率。基本面具備強力支撐！")
 

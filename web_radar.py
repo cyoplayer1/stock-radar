@@ -210,7 +210,18 @@ def get_market_breadth():
 def us_market_brain():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌐 美股連動觀測")
-    us_tickers = {"TSM": "台積電 ADR", "ARM": "安謀 (Arm)", "NVDA": "輝達 (NVIDIA)", "SPCX": "馬斯克 (SPCX)"}
+    us_tickers = {
+        "TSM": "台積電 ADR", 
+        "ARM": "安謀 (Arm)", 
+        "AAPL": "蘋果 (Apple)",
+        "MSFT": "微軟 (Microsoft)",
+        "GOOG": "谷歌 (Alphabet)",
+        "AMZN": "亞馬遜 (Amazon)",
+        "NVDA": "輝達 (NVIDIA)",
+        "META": "Meta",
+        "TSLA": "特斯拉 (Tesla)",
+        "SPCX": "SpaceX"
+    }
     
     for ticker, name in us_tickers.items():
         try:
@@ -731,7 +742,7 @@ def diagnose_holding(ticker_in):
         if not status: status.append("✅ 強勢多頭")
         return {
             "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
-            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "状况": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
+            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
         }
     except: return None
 
@@ -1275,7 +1286,7 @@ if main_page == "🎯 股神六星雷達系統":
             c_moat1, c_moat2 = st.columns(2)
             with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="2317", key="moat_in")
             with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=274.0, step=1.0, key="moat_cost")
-            if st.button("🛡️ 啟護城河防守掃描", use_container_width=True):
+            if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
                 moat_data = analyze_dynamic_moat(moat_id, cost_p)
                 if moat_data:
                     current, support, cost = moat_data['current_price'], moat_data['support_price'], moat_data['cost_price']

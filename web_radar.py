@@ -1721,32 +1721,6 @@ elif main_page == "🚀 早盤渦輪截擊":
                 st.dataframe(df_run_display, use_container_width=True, hide_index=True)
             else:
                 st.warning("👀 目前盤面沒有符合起漲點火的強勢標的。")
-# ==========================
-def analyze_ai_bubble_risk(inventory_level: str, taiwan_export_trend: str) -> str:
-    """
-    根據半導體庫存與台灣出口數據，評估 AI 產業的泡沫風險與真實需求。
-    
-    :param inventory_level: 半導體大廠庫存水位 ("low", "normal", "high")
-    :param taiwan_export_trend: 台灣月度出口趨勢 ("growing", "stagnant", "declining")
-    :return: 分析結果字串
-    """
-    
-    print("--- AI 產業趨勢分析 ---")
-    print(f"目前半導體庫存狀態: {inventory_level}")
-    print(f"目前台灣出口數據趨勢: {taiwan_export_trend}")
-    print("-" * 25)
-    
-    # 邏輯 1：庫存低檔 且 出口成長 -> 供不應求，實質需求強勁 (如影片中所述)
-    if inventory_level == "low" and taiwan_export_trend == "growing":
-        return "【結論】AI 需求具備強勁基本面支撐！半導體供不應求，且台灣領先指標表現亮眼，無明顯泡沫破裂跡象。"
-    
-    # 邏輯 2：庫存變高 且 出口衰退 -> 需求反轉，有泡沫化風險
-    elif inventory_level == "high" and taiwan_export_trend == "declining":
-        return "【警訊】需注意 AI 泡沫風險！半導體庫存正在堆積，且台灣領先指標出現衰退，顯示供需可能已經反轉。"
-    
-    # 邏輯 3：其他過渡狀態
-    else:
-        return "【觀察中】數據表現不一致，建議持續追蹤下個月的台灣出口數據以及下一季的美股財報。"
 
 # 測試情境：模擬 2023 年 NVIDIA 噴出前夕的狀況
 result = analyze_ai_bubble_risk(inventory_level="low", taiwan_export_trend="growing")

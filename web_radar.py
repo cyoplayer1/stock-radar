@@ -36,7 +36,7 @@ except ImportError:
 # === 1. 系統環境設定與機密管理 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V12.1", page_icon="📡", layout="wide")
+st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V12.2", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -224,7 +224,8 @@ def us_market_brain():
         "NVDA": "輝達 (NVIDIA)",
         "META": "Meta",
         "TSLA": "特斯拉 (Tesla)",
-        "SPCX": "SpaceX"
+        "SPCX": "SpaceX",
+        "SKHY": "SK海力士 (SK Hynix)" # 🌟 新增 SKHY
     }
     
     for ticker, name in us_tickers.items():
@@ -1532,54 +1533,70 @@ elif main_page == "🌐 全球金融戰情室":
                 st.warning("無法取得大盤資料。")
 
     with tabs[7]:
-        st.subheader("🫧 AI 產業泡沫觀測 (財經 M 平方邏輯)")
-        st.info("💡 **核心邏輯**：觀察「半導體大廠庫存」是否維持低檔，以及「台灣出口數據」是否持續創高，藉此判斷 AI 是實質需求還是泡沫。")
+        st.subheader("🫧 AI 產業泡沫觀測 (即時財報源頭連線)")
+        st.info("💡 **核心邏輯**：繞過付費 API，直接連線美股源頭。比對「AI 核心軍火商」與「傳統消費性電子」的最新一季營收年增率 (YoY)。若 AI 廠持續碾壓，代表實質需求依舊狂熱，泡沫尚未破裂。")
         
-        col_inv, col_exp = st.columns(2)
-        with col_inv:
-            st.markdown("#### 📦 指標一：半導體存貨週轉天數")
-            st.metric("AI 核心大廠 (NVDA/TSMC等)", "74.25 天", "-低檔健康", delta_color="normal")
-            st.metric("消費性電子/記憶體", "114~123 天", "+堆積風險", delta_color="inverse")
-            st.caption("數據來源：財經 M 平方真實數據 (截至 2026 Q1)")
+        @st.cache_data(ttl=86400) # 財報不常更新，快取設定 24 小時
+        def fetch_real_fundamental_comparison():
+            ai_tickers = {"NVDA": "輝達 (AI核心)", "TSM": "台積電 (晶圓代工)", "SMCI": "美超微 (伺服器)", "SKHY": "SK海力士 (HBM)"}
+            consumer_tickers = {"AAPL": "蘋果 (手機)", "INTC": "英特爾 (傳統PC)", "QCOM": "高通 (通訊)"}
             
-        with col_exp:
-            st.markdown("#### 🚢 指標二：台灣每月出口數據")
-            st.metric("台灣單月出口總額", "784.79 億美元", "+51.68% (YoY)", delta_color="normal")
-            st.caption("說明：台灣出口數據高度即時，為全球科技趨勢與美股財報的領先指標。")
-            
-        st.divider()
-        
-        col_chart_inv, col_chart_exp = st.columns(2)
-        
-        with col_chart_inv:
-            st.markdown("#### 📊 半導體大廠存貨週轉趨勢 (季度)")
-            inv_df = pd.DataFrame({
-                "季度": ["25Q1", "25Q2", "25Q3", "25Q4", "26Q1"],
-                "AI 核心大廠": [85, 80, 78, 75, 74.25],
-                "記憶體大廠": [98, 102, 108, 112, 114.15],
-                "消費性電子": [110, 115, 118, 121, 123.67]
-            })
-            inv_melted = inv_df.melt(id_vars="季度", var_name="板塊", value_name="週轉天數")
-            fig_inv = px.bar(inv_melted, x="季度", y="週轉天數", color="板塊", barmode="group", color_discrete_sequence=['#ff4b4b', '#ffd166', '#00cc96'])
-            fig_inv.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-            st.plotly_chart(fig_inv, use_container_width=True)
-            
-        with col_chart_exp:
-            st.markdown("#### 📊 台灣單月出口總額與年增率 (月度)")
-            exp_df = pd.DataFrame({
-                "月份": ["25/12", "26/01", "26/02", "26/03", "26/04", "26/05"],
-                "出口總額": [650, 680, 630, 720, 750, 784.79],
-                "年增率": [25.4, 30.1, 28.5, 38.2, 47.9, 51.68]
-            })
-            fig_exp = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_exp.add_trace(go.Bar(x=exp_df["月份"], y=exp_df["出口總額"], name="出口值(億)", marker_color="#00cc96"), secondary_y=False)
-            fig_exp.add_trace(go.Scatter(x=exp_df["月份"], y=exp_df["年增率"], name="YoY(%)", line=dict(color="#ffd166", width=3)), secondary_y=True)
-            fig_exp.update_layout(template="plotly_dark", height=300, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-            st.plotly_chart(fig_exp, use_container_width=True)
+            data = []
+            # 抓 AI 組
+            for tk, name in ai_tickers.items():
+                try:
+                    info = yf.Ticker(tk).info
+                    rev_growth = info.get('revenueGrowth', 0) * 100
+                    margin = info.get('grossMargins', 0) * 100
+                    data.append({"板塊": "🔥 AI 核心軍火商", "公司": name, "營收年增率(%)": rev_growth, "毛利率(%)": margin})
+                except: pass
+                
+            # 抓消費性電子組
+            for tk, name in consumer_tickers.items():
+                try:
+                    info = yf.Ticker(tk).info
+                    rev_growth = info.get('revenueGrowth', 0) * 100
+                    margin = info.get('grossMargins', 0) * 100
+                    data.append({"板塊": "📱 傳統消費電子", "公司": name, "營收年增率(%)": rev_growth, "毛利率(%)": margin})
+                except: pass
+                
+            return pd.DataFrame(data)
 
-        st.divider()
-        st.markdown("#### 🤖 綜合診斷結果")
-        st.success("✅ **【無泡沫破裂跡象】** 目前 AI 核心大廠庫存遠低於傳統消費性電子，處於「供不應求」的狀態；且台灣出口受 AI 伺服器與 CSP 資本支出帶動，持續維持高檔年增率。基本面具備強力支撐！")
+        with st.spinner("⚡ 正在跨海連線華爾街，解析最新財報數據..."):
+            fund_df = fetch_real_fundamental_comparison()
+            
+        if not fund_df.empty:
+            col_chart_inv, col_chart_exp = st.columns(2)
+            
+            with col_chart_inv:
+                st.markdown("#### 📊 最新一季營收年增率 (實質需求)")
+                fig_rev = px.bar(fund_df, x="公司", y="營收年增率(%)", color="板塊", 
+                                 color_discrete_map={"🔥 AI 核心軍火商": "#ff4b4b", "📱 傳統消費電子": "#00cc96"})
+                fig_rev.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                st.plotly_chart(fig_rev, use_container_width=True)
+                
+            with col_chart_exp:
+                st.markdown("#### 📊 企業護城河：最新毛利率")
+                fig_margin = px.bar(fund_df, x="公司", y="毛利率(%)", color="板塊", 
+                                    color_discrete_map={"🔥 AI 核心軍火商": "#ffd166", "📱 傳統消費電子": "#1f77b4"})
+                fig_margin.update_layout(template="plotly_dark", height=350, margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                st.plotly_chart(fig_margin, use_container_width=True)
+
+            st.divider()
+            
+            # 自動動態產生結論
+            ai_avg_growth = fund_df[fund_df['板塊'] == '🔥 AI 核心軍火商']['營收年增率(%)'].mean()
+            con_avg_growth = fund_df[fund_df['板塊'] == '📱 傳統消費電子']['營收年增率(%)'].mean()
+            
+            st.markdown("#### 🤖 系統自動診斷結果")
+            if ai_avg_growth > con_avg_growth + 20:
+                st.success(f"✅ **【無泡沫跡象，強者恆強】** 目前 AI 核心軍火商的平均營收成長 ({ai_avg_growth:.1f}%) 遠甩傳統消費性電子 ({con_avg_growth:.1f}%)。熱錢與實質獲利皆集中在 AI 板塊，主升段動能無虞！")
+            elif ai_avg_growth < con_avg_growth:
+                st.error(f"🚨 **【泡沫破裂警戒】** AI 公司的成長率 ({ai_avg_growth:.1f}%) 已低於傳統消費電子 ({con_avg_growth:.1f}%)！實質需求可能已經見頂，請極度留意大盤反轉風險！")
+            else:
+                st.warning(f"⚠️ **【資金輪動中】** 兩者成長率開始拉近 (AI: {ai_avg_growth:.1f}% / 傳統: {con_avg_growth:.1f}%)，市場可能正從 AI 硬體輪動至其他板塊，建議縮小部位。")
+        else:
+            st.error("API 連線失敗，無法取得財報數據。")
 
 # ==========================================
 # 分頁 3: 🤝 土洋主力共振雷達

@@ -18,6 +18,12 @@ import xml.etree.ElementTree as ET
 from gtts import gTTS
 import io
 
+# === 升級套件：斷線重連避震器 ===
+try:
+    from tenacity import retry, wait_exponential, stop_after_attempt
+except ImportError:
+    st.error("⚠️ 缺少避震套件，請在終端機執行: pip install tenacity")
+
 # === 非同步連線與自動刷新套件 ===
 import asyncio
 import aiohttp
@@ -30,7 +36,7 @@ except ImportError:
 # === 1. 系統環境設定與機密管理 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V12.0", page_icon="📡", layout="wide")
+st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V12.1", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -130,7 +136,7 @@ def get_and_increment_view_count():
 
 def save_trade_maintenance_log(stock, reason, stop_loss, status):
     new_log = pd.DataFrame([{
-        "時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "時間": datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M"),
         "標的代號": stock,
         "進場型態與理由": reason,
         "預計防守價": stop_loss,
@@ -146,20 +152,18 @@ def save_trade_maintenance_log(stock, reason, stop_loss, status):
         df = new_log
     df.to_csv(MAINTENANCE_LOG_FILE, index=False)
 
-# === 4. 🛡️ 安全連線防護機制 ===
-def safe_get_json(url, headers, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
-            response.raise_for_status() 
-            return response.json()
-        except (ChunkedEncodingError, ConnectionError, ReadTimeout):
-            time.sleep(2)
-        except ValueError:
-            break
-        except Exception:
-            break
-    return {}
+# === 4. 🛡️ 安全連線防護機制 (加入 Tenacity 避震) ===
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+def safe_get_json(url, headers):
+    response = requests.get(url, headers=headers, timeout=15, verify=False)
+    response.raise_for_status() 
+    return response.json()
+
+def safe_get_json_fallback(url, headers, max_retries=3):
+    try:
+        return safe_get_json(url, headers)
+    except Exception:
+        return {}
 
 # === 5. V8 雙渦輪引擎：YFinance 批次高速下載 ===
 @st.cache_data(ttl=900)
@@ -266,7 +270,7 @@ def ai_voice_report(market_status):
     st.sidebar.subheader("🎙️ AI 語音早報")
     if st.sidebar.button("📢 生成並播放今日早報", use_container_width=True):
         with st.spinner("專屬 AI 正在整理戰報並錄音中..."):
-            now = datetime.datetime.now().strftime("%Y年%m月%d日")
+            now = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y年%m月%d日")
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
             report_text = f"老闆早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據與成交排行榜已更新。請透過 VPVR 圖表確認持股是否踩在關鍵紅K支撐之上，祝您修車與操作順利！"
             try:
@@ -278,16 +282,22 @@ def ai_voice_report(market_status):
             except Exception as e:
                 st.sidebar.error(f"語音生成失敗: {e}")
 
+# 升級：Line Notify 模組支援圖片推播功能
+def send_line_notify_with_image(token, message, image_path=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    data = {'message': message}
+    files = {'imageFile': open(image_path, 'rb')} if image_path else None
+    res = requests.post("https://notify-api.line.me/api/notify", headers=headers, data=data, files=files)
+    return res
+
 def line_notify_setting():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📲 Line 警報器 (擴充槽)")
     line_token = st.sidebar.text_input("Line Notify Token", type="password", help="輸入你的 Token 以啟用手機推播")
     if st.sidebar.button("傳送測試訊息"):
         if line_token:
-            headers = {"Authorization": "Bearer " + line_token}
-            data = {'message':'🔧 雷達 Line 連線測試成功！'}
             try:
-                res = requests.post("https://notify-api.line.me/api/notify", headers=headers, data=data)
+                res = send_line_notify_with_image(line_token, '🔧 雷達 Line 連線測試成功！')
                 if res.status_code == 200: st.sidebar.success("✅ 測試發送成功！")
                 else: st.sidebar.error(f"❌ Token 錯誤或連線失敗 ({res.status_code})。")
             except: st.sidebar.error("發送請求時發生異常")
@@ -301,7 +311,7 @@ def fetch_top15_ranking():
     def get_tse(date_str=""):
         url = "https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999"
         if date_str: url += f"&date={date_str}"
-        res = safe_get_json(url, HEADERS)
+        res = safe_get_json_fallback(url, HEADERS)
         if res and 'tables' in res:
             for t in res['tables']:
                 if '證券代號' in t.get('fields', []) and '成交金額' in t.get('fields', []):
@@ -316,7 +326,7 @@ def fetch_top15_ranking():
     def get_otc(date_str=""):
         url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json"
         if date_str: url += f"&d={date_str}"
-        res = safe_get_json(url, HEADERS)
+        res = safe_get_json_fallback(url, HEADERS)
         data_otc = res.get('aaData', []) or (res.get('tables', [{}])[0].get('data', []) if 'tables' in res else [])
         if data_otc:
             df = pd.DataFrame(data_otc)
@@ -328,7 +338,7 @@ def fetch_top15_ranking():
                 return df_sorted
         return pd.DataFrame()
 
-    today = datetime.datetime.now()
+    today = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8)))
     for i in range(7):
         d_tse = (today - datetime.timedelta(days=i)).strftime('%Y%m%d') if i > 0 else ""
         tse_df = get_tse(d_tse)
@@ -375,14 +385,19 @@ def calculate_macd(df):
     df['Hist'] = df['MACD'] - df['Signal']
     return df
 
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
+def fetch_fugle_api(symbol):
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
+    res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=5, verify=False)
+    res.raise_for_status()
+    return res.json()
+
 def get_fugle_realtime(symbol):
     try:
-        url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
-        res = requests.get(url, headers={"X-API-KEY": FUGLE_API_KEY}, timeout=5, verify=False)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get('closePrice'), data.get('total', {}).get('tradeVolume', 0)
-    except: pass
+        data = fetch_fugle_api(symbol)
+        return data.get('closePrice'), data.get('total', {}).get('tradeVolume', 0)
+    except Exception:
+        pass
     return None, None
 
 def fetch_fast_price(symbol):
@@ -462,11 +477,11 @@ def get_inst_data():
     inst_map = {}
     try:
         u1 = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
-        r1 = safe_get_json(u1, HEADERS)
+        r1 = safe_get_json_fallback(u1, HEADERS)
         if 'data' in r1:
             for d in r1['data']: inst_map[d[0].strip()] = int(d[2].replace(',', '')) + int(d[10].replace(',', ''))
         u2 = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
-        r2 = safe_get_json(u2, HEADERS)
+        r2 = safe_get_json_fallback(u2, HEADERS)
         if 'aaData' in r2:
             for d in r2['aaData']: inst_map[d[0].strip()] = int(d[8].replace(',', '')) + int(d[10].replace(',', ''))
     except: pass
@@ -478,7 +493,7 @@ def fetch_co_buying_radar():
     try:
         # 1. 抓取上市 (TWSE) 籌碼
         url_twse = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
-        res_twse = safe_get_json(url_twse, HEADERS)
+        res_twse = safe_get_json_fallback(url_twse, HEADERS)
         if 'data' in res_twse and 'fields' in res_twse:
             fields = res_twse['fields']
             idx_code = fields.index("證券代號") if "證券代號" in fields else 0
@@ -499,7 +514,7 @@ def fetch_co_buying_radar():
 
         # 2. 抓取上櫃 (TPEx) 籌碼
         url_tpex = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
-        res_tpex = safe_get_json(url_tpex, HEADERS)
+        res_tpex = safe_get_json_fallback(url_tpex, HEADERS)
         if 'aaData' in res_tpex:
             for d in res_tpex['aaData']:
                 try:
@@ -604,7 +619,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
         c = df['Close'].iloc[-1]
         v = df['Volume'].iloc[-1]
         
-        now_tw = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        now_tw = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8)))
         is_market_closed = now_tw.hour >= 14 or now_tw.weekday() >= 5
         
         if is_market_closed:
@@ -786,10 +801,10 @@ def run_simple_backtest(symbol):
 
 # === 11. 🕵️‍♂️ 經理人籌碼追蹤 ===
 def fetch_today_holdings_from_api(etf_code="00981A"):
-    today = datetime.datetime.today().strftime('%Y-%m-%d')
+    today = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
     new_data = []
     url_twse = f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}"
-    res = safe_get_json(url_twse, HEADERS)
+    res = safe_get_json_fallback(url_twse, HEADERS)
     if res and 'data' in res and len(res['data']) > 0:
         for row in res['data']:
             ticker = str(row[0]).strip()
@@ -800,7 +815,7 @@ def fetch_today_holdings_from_api(etf_code="00981A"):
 
 def get_00981a_holdings_history(force_refresh=False):
     db_path = "00981A_holdings_db.csv"
-    today_str = datetime.datetime.today().strftime('%Y-%m-%d')
+    today_str = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
     if os.path.exists(db_path): df_history = pd.read_csv(db_path)
     else: df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
         
@@ -818,7 +833,7 @@ def get_00981a_holdings_history(force_refresh=False):
         st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
     elif df_history.empty:
         st.info("💡 已啟動【火力全開視覺預覽模式】：為您載入模擬持股與連續籌碼動向。")
-        dates = [(datetime.datetime.today() - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
+        dates = [(datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))) - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
         mock_scenarios = [
             ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
             ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
@@ -909,7 +924,7 @@ async def run_morning_scan_async(valid_list, bulk_data_dict, test_mode):
             df_hist = bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"))
             prev_vol = 0
             if df_hist is not None and len(df_hist) >= 2:
-                prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now().hour < 14 else df_hist['Volume'].iloc[-1]
+                prev_vol = df_hist['Volume'].iloc[-2] if datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).hour < 14 else df_hist['Volume'].iloc[-1]
             
             clean_id = t
             full_name = STOCKS_DICT.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), t)
@@ -1099,7 +1114,6 @@ if main_page == "🎯 股神六星雷達系統":
         ])
         
         with t1:
-            # 【功能 1：短影音視覺化戰報按鈕】
             st.subheader("📸 社群媒體短影音工具")
             show_card = st.checkbox("📸 開啟 9:16 短影音戰報卡片面板", value=False)
             
@@ -1124,7 +1138,6 @@ if main_page == "🎯 股神六星雷達系統":
                     df = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False]).reset_index(drop=True)
                     df.insert(0, '名次', df.index + 1)
                     
-                    # 【功能 1：渲染 9:16 reels 戰報卡面】
                     if show_card and not df.empty:
                         top_one = df.iloc[0]
                         card_html = f"""
@@ -1150,7 +1163,7 @@ if main_page == "🎯 股神六星雷達系統":
                             </div>
                             <div style="margin-top: 45px; text-align: center; border-top: 1px solid #333; padding-top: 10px;">
                                 <p style="font-size: 11px; color: #666666; margin: 0;">📊 機械化無情操盤 • 嚴守破線紀律</p>
-                                <p style="font-size: 9px; color: #444444; margin-top: 3px;">系統產出時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+                                <p style="font-size: 9px; color: #444444; margin-top: 3px;">系統產出時間: {datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')}</p>
                             </div>
                         </div>
                         """
@@ -1158,7 +1171,6 @@ if main_page == "🎯 股神六星雷達系統":
                         st.info("💡 提示：你可以直接手機單手截圖或螢幕錄影上方卡面，完美契合短影音 9:16 直式規格！")
                         st.divider()
 
-                    # 【功能 2：資訊減法優化欄位過濾】
                     if hide_complex_tech:
                         display_df = df[['名次', '標的', '看盤連結', '星等', '收盤']]
                     else:
@@ -1257,7 +1269,6 @@ if main_page == "🎯 股神六星雷達系統":
                         if suggested_shares > (v5_avg * 0.01): st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！建議降低部位！")
                 else: st.error("診斷失敗：無法取得足夠的歷史資料。")
 
-            # 【功能 3：交易保養工單歷史表格紀錄功能】
             st.markdown("---")
             st.markdown("### 📝 填寫個股交易保養工單 (進場履歷)")
             with st.form("maintenance_log_form"):
@@ -1286,7 +1297,7 @@ if main_page == "🎯 股神六星雷達系統":
             c_moat1, c_moat2 = st.columns(2)
             with c_moat1: moat_id = st.text_input("🛡️ 持股代號", value="2317", key="moat_in")
             with c_moat2: cost_p = st.number_input("💰 您的平均成本價", value=274.0, step=1.0, key="moat_cost")
-            if st.button("🛡️ 啟動護城河防守掃描", use_container_width=True):
+            if st.button("🛡️ 啟護城河防守掃描", use_container_width=True):
                 moat_data = analyze_dynamic_moat(moat_id, cost_p)
                 if moat_data:
                     current, support, cost = moat_data['current_price'], moat_data['support_price'], moat_data['cost_price']
@@ -1371,7 +1382,6 @@ if main_page == "🎯 股神六星雷達系統":
                             if '⚡' in val or '👑' in val: return 'color: #ffd166; font-weight: bold'
                         return ''
                     
-                    # 【功能 2：資訊減法優化】
                     if hide_complex_tech:
                         df_breakout_display = df_breakout[['標的', '看盤連結', '即時收盤價', '引擎型態']]
                     else:
@@ -1390,7 +1400,7 @@ if main_page == "🎯 股神六星雷達系統":
 # ==========================================
 elif main_page == "🌐 全球金融戰情室":
     st.title("🌐 阿綜專屬：全球金融戰情室 (AI旗艦版)")
-    st.caption(f"🕒 最後更新時間 (台灣): {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption(f"🕒 最後更新時間 (台灣): {datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}")
     st.markdown("---")
 
     tabs = st.tabs([
@@ -1543,7 +1553,6 @@ elif main_page == "🌐 全球金融戰情室":
         
         with col_chart_inv:
             st.markdown("#### 📊 半導體大廠存貨週轉趨勢 (季度)")
-            # 建立季度庫存模擬數據 (反映文字描述的趨勢)
             inv_df = pd.DataFrame({
                 "季度": ["25Q1", "25Q2", "25Q3", "25Q4", "26Q1"],
                 "AI 核心大廠": [85, 80, 78, 75, 74.25],
@@ -1557,7 +1566,6 @@ elif main_page == "🌐 全球金融戰情室":
             
         with col_chart_exp:
             st.markdown("#### 📊 台灣單月出口總額與年增率 (月度)")
-            # 建立月度出口模擬數據
             exp_df = pd.DataFrame({
                 "月份": ["25/12", "26/01", "26/02", "26/03", "26/04", "26/05"],
                 "出口總額": [650, 680, 630, 720, 750, 784.79],
@@ -1615,7 +1623,6 @@ elif main_page == "🤝 土洋主力共振雷達":
                     if isinstance(val, str) and '🌟' in val: return 'color: #ffd166; font-weight: bold'
                     return ''
                 
-                # 【功能 2：減法哲學過濾】
                 if hide_complex_tech:
                     co_buy_df_display = co_buy_df[['名次', '代號', '名稱', '合計買超(張)', '技術面星等']]
                 else:
@@ -1716,7 +1723,6 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         display_df = analyzed_df.drop(columns=['連續天數', '產業族群', '最新收盤價_num', '市值預估']).rename(columns={'連續天數顯示': '連續天數'}).reset_index(drop=True)
         display_df.insert(0, '名次', display_df.index + 1)
         
-        # 【功能 2：減法哲學過濾表格】
         if hide_complex_tech:
             display_df = display_df[['名次', '代號', '股票名稱', '最新收盤價', '六星技術評等']]
 
@@ -1775,7 +1781,6 @@ elif main_page == "🚀 早盤渦輪截擊":
                 df_run = pd.DataFrame(runners).sort_values(by="即時漲幅", ascending=False).reset_index(drop=True)
                 df_run.insert(0, '🔥 排名', df_run.index + 1)
                 
-                # 【功能 2：資訊減法優化】
                 if hide_complex_tech:
                     df_run_display = df_run[['🔥 排名', '代號', '名稱', '即時價', '漲幅顯示']]
                 else:

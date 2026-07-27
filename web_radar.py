@@ -102,7 +102,6 @@ except Exception as e:
     SECTOR_MAP = DEFAULT_SECTORS
     st.toast(f"讀取設定檔失敗，使用系統預設名單: {e}")
 
-# 建立純數字 ID 映射到完整後綴 ID 的字典
 CLEAN_TO_FULL_MAP = {k.split('.')[0]: k for k in STOCKS_DICT.keys()}
 
 DAY_TRADER_BRANCHES = [
@@ -225,7 +224,7 @@ def us_market_brain():
         "META": "Meta",
         "TSLA": "特斯拉 (Tesla)",
         "SPCX": "SpaceX",
-        "SKHY": "SK海力士 (SK Hynix)" # 🌟 新增 SKHY
+        "SKHY": "SK海力士 (SK Hynix)"
     }
     
     for ticker, name in us_tickers.items():
@@ -283,7 +282,6 @@ def ai_voice_report(market_status):
             except Exception as e:
                 st.sidebar.error(f"語音生成失敗: {e}")
 
-# 升級：Line Notify 模組支援圖片推播功能
 def send_line_notify_with_image(token, message, image_path=None):
     headers = {"Authorization": f"Bearer {token}"}
     data = {'message': message}
@@ -492,7 +490,6 @@ def get_inst_data():
 def fetch_co_buying_radar():
     co_buy_list = []
     try:
-        # 1. 抓取上市 (TWSE) 籌碼
         url_twse = "https://www.twse.com.tw/fund/T86?response=json&selectType=ALLBUT0999"
         res_twse = safe_get_json_fallback(url_twse, HEADERS)
         if 'data' in res_twse and 'fields' in res_twse:
@@ -513,7 +510,6 @@ def fetch_co_buying_radar():
                         })
                 except: pass
 
-        # 2. 抓取上櫃 (TPEx) 籌碼
         url_tpex = "https://www.tpex.org.tw/web/stock/fund/T86/T86_result.php?l=zh-tw&o=json"
         res_tpex = safe_get_json_fallback(url_tpex, HEADERS)
         if 'aaData' in res_tpex:
@@ -536,8 +532,8 @@ def fetch_co_buying_radar():
         df = df.sort_values(by='合計買超(張)', ascending=False).reset_index(drop=True)
     return df
 
-# === 10. 雷達與各項診斷圖表邏輯 ===
-def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
+# === 10. 雷達與各項診斷圖表邏輯 (整合籌碼防禦機制) ===
+def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 65: return None
@@ -556,6 +552,12 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
+        
+        # 🛡️ 【籌碼防禦濾網】：大盤偏空逆風時，嚴格過濾弱勢標的
+        if is_bearish:
+            if c < df['MA60'].iloc[-1]: return None # 跌破季線不看
+            if inst_map.get(clean_id, 0) <= 0: return None # 無法人大人照顧不看
+            
         df = calculate_kd(df)
         df = calculate_macd(df)
         
@@ -607,7 +609,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list):
     except: return None
 
 # === 🧠 飆股引擎 1：旱地拔蔥 (盤整壓縮破新高) ===
-def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
+def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 65: return None
@@ -639,6 +641,10 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
+        
+        # 🛡️ 【籌碼防禦濾網】
+        if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
+        
         is_bull_trend = (df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1])
         
         consolidation_pct = (recent_10d_high - recent_10d_low) / recent_10d_low
@@ -665,7 +671,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map):
     except: return None
 
 # === 🧠 飆股引擎 2：主升段回踩軋空 (老鴨頭型態) ===
-def short_squeeze_moat_scanner(clean_id, df_ticker, full_id, inst_map):
+def short_squeeze_moat_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 65: return None
@@ -682,6 +688,9 @@ def short_squeeze_moat_scanner(clean_id, df_ticker, full_id, inst_map):
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df)
+        
+        # 🛡️ 【籌碼防禦濾網】
+        if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
         
         if df['MA20'].iloc[-1] <= df['MA20'].iloc[-3] or df['MA60'].iloc[-1] <= df['MA60'].iloc[-3]: return None
         
@@ -1034,7 +1043,8 @@ if main_page == "🎯 股神六星雷達系統":
                 bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                 
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")), CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list) for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
+                    # 傳入 is_bearish 來啟動籌碼與均線防禦
+                    futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")), CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     for f in as_completed(futs):
                         r = f.result()
                         if r:
@@ -1082,8 +1092,8 @@ if main_page == "🎯 股神六星雷達系統":
                 bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                 valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    futs_breakout = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map) for t in valid_list]
-                    futs_squeeze = [ex.submit(short_squeeze_moat_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map) for t in valid_list]
+                    futs_breakout = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+                    futs_squeeze = [ex.submit(short_squeeze_moat_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
                     for f in as_completed(futs_breakout + futs_squeeze):
                         r = f.result()
                         if r: breakout_res.append(r)
@@ -1130,7 +1140,8 @@ if main_page == "🎯 股神六星雷達系統":
                 with st.spinner("🧠 開始運算技術共振指標..."):
                     valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     with ThreadPoolExecutor(max_workers=5) as ex:
-                        futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list) for t in valid_list]
+                        # 傳入 is_bearish 引數
+                        futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
                         for i, f in enumerate(as_completed(futs)):
                             pb.progress((i+1)/len(valid_list))
                             if f.result(): res.append(f.result())
@@ -1195,7 +1206,7 @@ if main_page == "🎯 股神六星雷達系統":
                         }
                     )
                 else:
-                    st.warning("目前沒有符合量能條件的標的，或 API 讀取中，請稍後再試。")
+                    st.warning("目前沒有符合量能條件的標的，或大盤環境不佳未達防禦標準。請稍後再試。")
 
         with t_top:
             st.markdown("### 🔥 全市場資金流向與類股權重爭霸戰")
@@ -1227,14 +1238,6 @@ if main_page == "🎯 股神六星雷達系統":
                 st.info(f"💡 **金流雷達即時解讀**：目前市場熱錢最密集的族群為 **【{top_sector}】**，資金進駐該板塊的力道最強！")
             else:
                 st.warning("⚠️ 系統連線中或無排行榜資料，無法繪製類股金流圖。")
-            st.divider()
-            col1, col2 = st.columns(2)
-            with col1:
-                st.caption("🏆 上市成交值排行 (TWSE)")
-                if not tse_top.empty: st.dataframe(tse_top.rename(columns={'成交金額':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
-            with col2:
-                st.caption("🏆 上櫃成交值排行 (TPEX)")
-                if not otc_top.empty: st.dataframe(otc_top.rename(columns={'成交金額':'成交億'}).assign(成交億=lambda x: (x['成交億']/100000000).round(1)), hide_index=True, use_container_width=True)
 
         with t2:
             st.markdown("### 📈 VPVR 籌碼透視 X 光機")
@@ -1322,7 +1325,7 @@ if main_page == "🎯 股神六星雷達系統":
                     bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                 valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list) for t in valid_list]
+                    futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, False) for t in valid_list]
                     for i, f in enumerate(as_completed(futs)):
                         pb.progress((i+1)/len(valid_list))
                         res = f.result()
@@ -1365,8 +1368,8 @@ if main_page == "🎯 股神六星雷達系統":
                 with st.spinner("🔥 雙引擎全方位比對盤面結構..."):
                     valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     with ThreadPoolExecutor(max_workers=5) as ex:
-                        futs_1 = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map) for t in valid_list]
-                        futs_2 = [ex.submit(short_squeeze_moat_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map) for t in valid_list]
+                        futs_1 = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+                        futs_2 = [ex.submit(short_squeeze_moat_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
                         
                         for i, f in enumerate(as_completed(futs_1 + futs_2)):
                             pb.progress((i+1)/(len(valid_list)*2))
@@ -1628,12 +1631,12 @@ elif main_page == "🤝 土洋主力共振雷達":
                         for t in hot_ids:
                             t_full = f"{t}.TW" if len(t)==4 else f"{t}.TWO"
                             if t_full in bulk_data:
-                                futs[ex.submit(analyze_stock_score_v2, t, bulk_data[t_full], t_full, inst_map, hot_ids)] = t
+                                futs[ex.submit(analyze_stock_score_v2, t, bulk_data[t_full], t_full, inst_map, hot_ids, is_bearish)] = t
                         for f in as_completed(futs):
                             res = f.result()
                             if res: tech_results[futs[f]] = res['星等']
                             
-                co_buy_df['技術面星等'] = co_buy_df['代號'].map(tech_results).fillna("💤 盤整/無資料")
+                co_buy_df['技術面星等'] = co_buy_df['代號'].map(tech_results).fillna("💤 盤整/無資料 (被防禦機制過濾)")
                 co_buy_df.insert(0, '名次', co_buy_df.index + 1)
                 
                 def highlight_co_buy(val):
@@ -1696,16 +1699,16 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
                     t_clean = str(row['代號'])
                     t_full = CLEAN_TO_FULL_MAP.get(t_clean, f"{t_clean}.TW")
                     if t_full in bulk_data_dict:
-                        futs[ex.submit(analyze_stock_score_v2, t_clean, bulk_data_dict[t_full], t_full, inst_map, hot_list)] = t_clean
+                        futs[ex.submit(analyze_stock_score_v2, t_clean, bulk_data_dict[t_full], t_full, inst_map, hot_list, is_bearish)] = t_clean
                 for f in as_completed(futs):
                     t = futs[f]
                     res = f.result()
                     if res:
                         star_dict[t] = res['星等']
                         price_dict[t] = res['收盤']
-                        warning_dict[t] = res.get('處置與風險', "✅ 安全")
+                        warning_dict[t] = res.get('處置與籌碼風險', "✅ 安全")
                     else:
-                        star_dict[t] = "💤 盤整 (無星)"; price_dict[t] = fetch_fast_price(t); warning_dict[t] = "✅ 安全"
+                        star_dict[t] = "💤 盤整/被防禦過濾"; price_dict[t] = fetch_fast_price(t); warning_dict[t] = "✅ 待確認"
             
             for _, row in analyzed_df.iterrows():
                 vwap_dict[row['代號']] = estimate_vwap(row['代號'], row['連續天數']) if row['動向狀態'] == "🟢 主力連買" else "---"

@@ -36,7 +36,7 @@ except ImportError:
 # === 1. 系統環境設定與機密管理 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V12.2", page_icon="📡", layout="wide")
+st.set_page_config(page_title="阿綜專屬：究極軍規雷達 V13.0", page_icon="📡", layout="wide")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
@@ -272,7 +272,7 @@ def ai_voice_report(market_status):
         with st.spinner("專屬 AI 正在整理戰報並錄音中..."):
             now = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y年%m月%d日")
             status_text = market_status if "偏多" in market_status or "偏空" in market_status else "目前無法取得連線"
-            report_text = f"老闆早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據與成交排行榜已更新。請透過 VPVR 圖表確認持股是否踩在關鍵紅K支撐之上，祝您修車與操作順利！"
+            report_text = f"老闆早安，今天是{now}。大盤狀態：{status_text}。美股台積電 ADR 數據與成交排行榜已更新。請嚴格執行紀律，祝您修車與操作順利！"
             try:
                 tts = gTTS(text=report_text, lang='zh-tw')
                 audio_fp = io.BytesIO()
@@ -532,7 +532,7 @@ def fetch_co_buying_radar():
         df = df.sort_values(by='合計買超(張)', ascending=False).reset_index(drop=True)
     return df
 
-# === 10. 雷達與各項診斷圖表邏輯 (整合籌碼防禦機制) ===
+# === 10. 雷達與各項診斷圖表邏輯 (多空雙向版) ===
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
     try:
         df = df_ticker.copy()
@@ -553,10 +553,10 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         
-        # 🛡️ 【籌碼防禦濾網】：大盤偏空逆風時，嚴格過濾弱勢標的
+        # 🛡️ 【籌碼防禦濾網】：大盤偏空逆風時，嚴格過濾弱勢做多標的
         if is_bearish:
-            if c < df['MA60'].iloc[-1]: return None # 跌破季線不看
-            if inst_map.get(clean_id, 0) <= 0: return None # 無法人大人照顧不看
+            if c < df['MA60'].iloc[-1]: return None
+            if inst_map.get(clean_id, 0) <= 0: return None
             
         df = calculate_kd(df)
         df = calculate_macd(df)
@@ -608,7 +608,52 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         }
     except: return None
 
-# === 🧠 飆股引擎 1：旱地拔蔥 (盤整壓縮破新高) ===
+# === 🧠 空方引擎：弱勢斷頭破底掃描 ===
+def bearish_breakdown_scanner(clean_id, df_ticker, full_id, inst_map):
+    try:
+        df = df_ticker.copy()
+        if df.empty or len(df) < 65: return None
+        
+        fc, fv = get_fugle_realtime(clean_id)
+        if fc:
+            df.iloc[-1, df.columns.get_loc('Close')] = fc
+            if fv: df.iloc[-1, df.columns.get_loc('Volume')] = fv
+            
+        c = df['Close'].iloc[-1]
+        v = df['Volume'].iloc[-1]
+        
+        # 1. 均線空頭排列 (月線與季線皆下彎，且股價在均線之下)
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
+        is_bear_trend = (c < df['MA20'].iloc[-1] < df['MA60'].iloc[-1])
+        is_ma_going_down = (df['MA20'].iloc[-1] < df['MA20'].iloc[-3])
+        
+        # 2. 型態破底 (判斷是否跌破近10日低點，若為盤中需微調 index)
+        now_tw = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8)))
+        if now_tw.hour < 14 and now_tw.weekday() < 5:
+            recent_10d_low = df['Low'].iloc[-12:-2].min() 
+        else:
+            recent_10d_low = df['Low'].iloc[-11:-1].min()
+            
+        is_breaking_down = c < recent_10d_low
+        
+        # 3. 籌碼渙散 (法人同步棄守)
+        inst_val = inst_map.get(clean_id, 0)
+        is_inst_dumping = inst_val < -300 # 放寬至 -300 張以利提早捕捉
+        
+        if is_bear_trend and is_ma_going_down and is_breaking_down and is_inst_dumping:
+            name = STOCKS_DICT.get(full_id, clean_id)
+            chart_url = f"https://tw.stock.yahoo.com/quote/{clean_id}/technical-analysis"
+            return {
+                '標的': f"{clean_id} {name}",
+                '看盤連結': chart_url,
+                '即時收盤價': round(c, 2),
+                '引擎型態': "☠️ 斷頭破底 (均線下彎+破底)",
+                '籌碼狀態': f"🟢 大戶提款 ({inst_val:,}張)",
+                '戰鬥評價': "🚨 強烈建議避開或列入空方觀察"
+            }
+    except: return None
+
 def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
     try:
         df = df_ticker.copy()
@@ -642,7 +687,6 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         
-        # 🛡️ 【籌碼防禦濾網】
         if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
         
         is_bull_trend = (df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1])
@@ -670,7 +714,6 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
             }
     except: return None
 
-# === 🧠 飆股引擎 2：主升段回踩軋空 (老鴨頭型態) ===
 def short_squeeze_moat_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
     try:
         df = df_ticker.copy()
@@ -689,7 +732,6 @@ def short_squeeze_moat_scanner(clean_id, df_ticker, full_id, inst_map, is_bearis
         df['MA60'] = df['Close'].rolling(60).mean()
         df = calculate_kd(df)
         
-        # 🛡️ 【籌碼防禦濾網】
         if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
         
         if df['MA20'].iloc[-1] <= df['MA20'].iloc[-3] or df['MA60'].iloc[-1] <= df['MA60'].iloc[-3]: return None
@@ -767,7 +809,7 @@ def diagnose_holding(ticker_in):
         if not status: status.append("✅ 強勢多頭")
         return {
             "標的": clean, "收盤": round(c,2), "MA5": round(m5,2), "MA20": round(m20,2), 
-            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "狀況": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
+            "KD": f"K:{round(k,1)}/D:{round(d,1)}", "状况": "、".join(status), "建議": action, "5日均量": max(1, v5_lots)
         }
     except: return None
 
@@ -952,7 +994,7 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 # === 13. 側邊欄與大盤風向球 ===
-st.sidebar.title("📡 阿綜專屬：軍規操盤台")
+st.sidebar.title("📡 阿綜專屬：軍規操盤台 V13.0")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 大盤多空風向球")
@@ -975,6 +1017,7 @@ st.sidebar.markdown("---")
 
 main_page = st.sidebar.radio("跳轉頁面", [
     "🎯 股神六星雷達系統", 
+    "📉 弱勢破底雷達 (防禦/空方)", # 🌟 新增空頭雷達頁面
     "🌐 全球金融戰情室",
     "🤝 土洋主力共振雷達", 
     "🏢 基本面與 AI 診斷", 
@@ -983,13 +1026,11 @@ main_page = st.sidebar.radio("跳轉頁面", [
     "🚀 早盤渦輪截擊"
 ])
 
-# 【功能 2：減法哲學開關】
 st.sidebar.subheader("🧼 減法優化濾網")
 hide_complex_tech = st.sidebar.toggle("🧼 執行減法哲學 (隱藏進階技術欄位)", value=False, help="隱藏次要的標籤、風險警告、觸發條件，只留下純粹價格與星等")
-
 mobile_mode = st.sidebar.toggle("📱 啟動極簡戰鬥模式", value=False, help="專為手機單手操作設計，隱藏複雜圖表與長表格")
 
-if main_page in ["🎯 股神六星雷達系統", "🤝 土洋主力共振雷達", "☠️ 隔日沖分點照妖鏡", "🚀 早盤渦輪截擊"]:
+if main_page in ["🎯 股神六星雷達系統", "📉 弱勢破底雷達 (防禦/空方)", "🤝 土洋主力共振雷達", "☠️ 隔日沖分點照妖鏡", "🚀 早盤渦輪截擊"]:
     st.sidebar.subheader("⚙️ 自選股水庫")
     def_tickers = ", ".join([k.split('.')[0] for k in STOCKS_DICT.keys()])
     u_input = st.sidebar.text_area("代號庫 (從 system_config.json 載入)：", value=def_tickers, height=150)
@@ -1006,14 +1047,12 @@ if st.sidebar.button("🧹 清除系統快取 (強制重抓)", use_container_wid
 st.sidebar.markdown(f"👁️ **累積瀏覽次數：** `{get_and_increment_view_count()}` 次")
 
 # ==========================================
-# 分頁 1: 🎯 股神六星雷達系統 (包含終極飆股戰情室)
+# 分頁 1: 🎯 股神六星雷達系統 (做多引擎)
 # ==========================================
 if main_page == "🎯 股神六星雷達系統":
-    # 【功能 4：防呆斷油機制】
     if is_bearish:
         st.error("⛔ **【系統防呆斷油機制已觸發】** 當前大盤處於偏空逆風環境。系統已自動鎖定高風險訊號，嚴防逆風做多遭假突破倒貨，建議極度縮小部位或觀望。")
     
-    # 💡 將完整心法提至最上方，確保手機與電腦版皆會顯示
     st.markdown("### 🎯 買進策略：共振發動")
     st.info("""
     💡 **【系統操盤核心心法】**
@@ -1026,24 +1065,18 @@ if main_page == "🎯 股神六星雷達系統":
     if mobile_mode:
         st.title("📱 戰鬥儀表板")
         st.info("⚡ **極簡模式啟動**：只顯示最高風險與最強訊號。")
-        
         col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            btn_normal = st.button("🚀 六星共振掃描", use_container_width=True)
-        with col_m2:
-            btn_ultimate = st.button("🔥 終極飆股掃描", use_container_width=True, type="primary")
+        with col_m1: btn_normal = st.button("🚀 六星共振掃描", use_container_width=True)
+        with col_m2: btn_ultimate = st.button("🔥 終極飆股掃描", use_container_width=True, type="primary")
 
         if btn_normal:
             inst_map = get_inst_data()
             hot_list = get_hot_rank_ids()
             res, danger_res = [], []
-            
-            with st.spinner("🚀 啟動 V12 雙渦輪引擎批次下載中..."):
+            with st.spinner("🚀 啟動 V13 雙渦輪引擎批次下載中..."):
                 full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                 bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
-                
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    # 傳入 is_bearish 來啟動籌碼與均線防禦
                     futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")), CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     for f in as_completed(futs):
                         r = f.result()
@@ -1054,8 +1087,7 @@ if main_page == "🎯 股神六星雷達系統":
             
             st.subheader("🚨 處置/隔日沖警戒區")
             if danger_res:
-                for d in danger_res:
-                    st.error(f"**{d['標的']}** | 收盤: {d['收盤']}\n\n⚠️ {d['處置與籌碼風險']}")
+                for d in danger_res: st.error(f"**{d['標的']}** | 收盤: {d['收盤']}\n\n⚠️ {d['處置與籌碼風險']}")
             else:
                 st.success("✅ 目前自選庫無過熱標的。")
                 
@@ -1064,7 +1096,6 @@ if main_page == "🎯 股神六星雷達系統":
             if res:
                 df_res = pd.DataFrame(res).sort_values(by=['星星數', '今日量(張)'], ascending=[False, False]).reset_index(drop=True)
                 df_res.insert(0, '名次', df_res.index + 1)
-                
                 for _, row in df_res.iterrows():
                     st.markdown(f"""
                     <div style='background-color:#1E1E1E; padding:15px; border-radius:10px; margin-bottom:12px; border-left: 5px solid #ffd166; box-shadow: 2px 2px 5px rgba(0,0,0,0.5);'>
@@ -1119,7 +1150,6 @@ if main_page == "🎯 股神六星雷達系統":
 
     else:
         st.title("📡 阿綜專屬：四維共振・真・大滿配終極版")
-        
         t1, t_top, t2, t3, t4, t5, t6 = st.tabs([
             "🎯 六星雷達", "🔥 金流榜", "📈 VPVR", "🛡️ 部位診斷", "🚨 處置警戒", "🧪 策略回測", "🚀 終極飆股戰情室"
         ])
@@ -1132,15 +1162,12 @@ if main_page == "🎯 股神六星雷達系統":
                 inst_map = get_inst_data()
                 hot_list = get_hot_rank_ids()
                 res, pb = [], st.progress(0)
-                
-                with st.spinner("🚀 啟動 V12 雙渦輪引擎批次下載歷史數據中..."):
+                with st.spinner("🚀 啟動 V13 雙渦輪引擎批次下載歷史數據中..."):
                     full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                     bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
-                    
                 with st.spinner("🧠 開始運算技術共振指標..."):
                     valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
                     with ThreadPoolExecutor(max_workers=5) as ex:
-                        # 傳入 is_bearish 引數
                         futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
                         for i, f in enumerate(as_completed(futs)):
                             pb.progress((i+1)/len(valid_list))
@@ -1268,7 +1295,7 @@ if main_page == "🎯 股神六星雷達系統":
                         risk_per_share = price - stop_loss
                         max_loss_amount = capital * (risk_pct / 100)
                         suggested_shares = max_loss_amount / (risk_per_share * 1000)
-                        st.success(f"**趨勢狀況：** {r_diag['狀況']}")
+                        st.success(f"**趨勢狀況：** {r_diag['状况']}")
                         st.info(f"#### 🤖 系統建議買進張數： **{max(1, int(suggested_shares))} 張**\n* **操作紀律**：買進後，若未來收盤跌破月線 ({stop_loss}) 請無條件停損。\n* **風控說明**：最大虧損將被控制在 **{max_loss_amount:,.0f} 元** 左右。")
                         if suggested_shares > (v5_avg * 0.01): st.error(f"💧 **流動性滑價警告**：您預計買進的張數超過該股近5日均量({v5_avg}張)的 1%！建議降低部位！")
                 else: st.error("診斷失敗：無法取得足夠的歷史資料。")
@@ -1320,7 +1347,7 @@ if main_page == "🎯 股神六星雷達系統":
                 hot_list = get_hot_rank_ids()
                 danger_list = []
                 pb = st.progress(0)
-                with st.spinner("🚀 啟動 V12 雙渦輪引擎批次下載歷史數據中..."):
+                with st.spinner("🚀 啟動 V13 雙渦輪引擎批次下載歷史數據中..."):
                     full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                     bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                 valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
@@ -1351,7 +1378,7 @@ if main_page == "🎯 股神六星雷達系統":
                 else: st.warning("資料不足，無法回測。")
 
         with t6:
-            st.markdown("### 🚀 V12 雙核心飆股戰情室")
+            st.markdown("### 🚀 V13 雙核心飆股戰情室")
             st.info("""
             🔥 **【終極多頭獵殺雙引擎】**
             1. **⚡ 旱地拔蔥 (壓縮突破)**：橫盤窄幅震幅 < 8%，今日帶量突破新高！
@@ -1361,7 +1388,7 @@ if main_page == "🎯 股神六星雷達系統":
                 inst_map = get_inst_data()
                 breakout_res = []
                 pb = st.progress(0)
-                with st.spinner("🚀 預熱 V12 雙渦輪引擎下載數據中..."):
+                with st.spinner("🚀 預熱 V13 雙渦輪引擎下載數據中..."):
                     full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
                     bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
                     
@@ -1400,7 +1427,50 @@ if main_page == "🎯 股神六星雷達系統":
                     st.warning("👀 目前盤面自選庫沒有符合「雙核心型態」的飆股。訊號不到絕不盲目出手！")
 
 # ==========================================
-# 分頁 2: 🌐 全球金融戰情室
+# 分頁 2: 📉 弱勢破底雷達 (新增：防禦/空方)
+# ==========================================
+elif main_page == "📉 弱勢破底雷達 (防禦/空方)":
+    st.title("📉 弱勢破底雷達 (斷頭空方引擎)")
+    st.error("⚠️ **【空方防護網】** 此引擎專門尋找「均線下彎、型態破底、法人倒貨」的弱勢標的。\n1. 若您手上的多單出現在此名單，強烈建議執行停損。\n2. 若要做空，請優先選擇這裡篩選出且法人大量提款的標的。")
+    
+    if st.button("☠️ 啟動空方破底掃描", use_container_width=True):
+        inst_map = get_inst_data()
+        bearish_res = []
+        pb = st.progress(0)
+        
+        with st.spinner("🚀 下載自選庫歷史數據中..."):
+            full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
+            bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
+            
+        with st.spinner("☠️ 空方引擎比對均線與籌碼狀態中..."):
+            valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                futs = [ex.submit(bearish_breakdown_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map) for t in valid_list]
+                for i, f in enumerate(as_completed(futs)):
+                    pb.progress((i+1)/len(valid_list))
+                    res = f.result()
+                    if res: bearish_res.append(res)
+                    
+        if bearish_res:
+            df_bearish = pd.DataFrame(bearish_res)
+            st.success(f"☠️ 掃描完成！共抓出 {len(df_bearish)} 檔極度弱勢破底標的！")
+            
+            def highlight_bearish(val):
+                if isinstance(val, str):
+                    if '🚨' in val or '☠️' in val: return 'color: #ff4b4b; font-weight: bold'
+                    if '🟢' in val: return 'color: #00cc96; font-weight: bold' # 法人大賣標綠色(偏空)
+                return ''
+                
+            st.dataframe(
+                df_bearish.style.map(highlight_bearish, subset=['引擎型態', '籌碼狀態', '戰鬥評價']), 
+                use_container_width=True, hide_index=True,
+                column_config={"看盤連結": st.column_config.LinkColumn("互動看盤", display_text="📈 點我看圖")}
+            )
+        else:
+            st.success("✅ 目前盤面自選庫沒有符合「斷頭破底」極端弱勢的標的。")
+
+# ==========================================
+# 分頁 3: 🌐 全球金融戰情室
 # ==========================================
 elif main_page == "🌐 全球金融戰情室":
     st.title("🌐 阿綜專屬：全球金融戰情室 (AI旗艦版)")
@@ -1602,13 +1672,12 @@ elif main_page == "🌐 全球金融戰情室":
             st.error("API 連線失敗，無法取得財報數據。")
 
 # ==========================================
-# 分頁 3: 🤝 土洋主力共振雷達
+# 分頁 4: 🤝 土洋主力共振雷達
 # ==========================================
 elif main_page == "🤝 土洋主力共振雷達":
     st.title("🤝 土洋主力共振雷達 (籌碼深度追蹤)")
     st.info("💡 **戰術核心**：鎖定今日【外資機構】與【本土投信】同步重壓淨買超的個股。當雙法人共振，往往是爆發大波段主升段的絕對起點。")
     
-    # 【功能 4：防呆斷油機制】
     if is_bearish:
         st.error("⛔ **【防呆限制】大盤目前環境風險極高**。即使土洋合買，逆勢操作的覆巢風險仍大，請務必搭配下方六星技術評等，非 5 星以上強勢股絕不盲動出手。")
 
@@ -1659,7 +1728,7 @@ elif main_page == "🤝 土洋主力共振雷達":
                 st.warning("👀 今日全市場未出現符合條件標的，或盤後數據尚未更新 (通常於每日 15:30 後更新)。")
 
 # ==========================================
-# 分頁 4: 🏢 基本面與 AI 診斷
+# 分頁 5: 🏢 基本面與 AI 診斷
 # ==========================================
 elif main_page == "🏢 基本面與 AI 診斷":
     st.title("🏢 基本面濾網與 AI 財報新聞分析")
@@ -1677,7 +1746,7 @@ elif main_page == "🏢 基本面與 AI 診斷":
             st.info(ai_report)
 
 # ==========================================
-# 分頁 5: 🕵️‍♂️ 00981A 經理人跟單雷達
+# 分頁 6: 🕵️‍♂️ 00981A 經理人跟單雷達
 # ==========================================
 elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
     st.title("🕵️‍♂️ 00981A 經理人跟單雷達 (大滿配防護版)")
@@ -1749,7 +1818,7 @@ elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # ==========================================
-# 分頁 6: ☠️ 隔日沖分點照妖鏡
+# 分頁 7: ☠️ 隔日沖分點照妖鏡
 # ==========================================
 elif main_page == "☠️ 隔日沖分點照妖鏡":
     st.title("☠️ 隔日沖分點照妖鏡 (主力追蹤網)")
@@ -1772,12 +1841,11 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
                 st.dataframe(mock_branch_data, use_container_width=True, hide_index=True)
 
 # ==========================================
-# 分頁 7: 🚀 早盤渦輪截擊
+# 分頁 8: 🚀 早盤渦輪截擊
 # ==========================================
 elif main_page == "🚀 早盤渦輪截擊":
     st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")
     
-    # 【功能 4：防呆斷油機制】
     if is_bearish:
         st.error("⛔ **【系統防呆斷油機制已觸發】** 大盤處於偏空逆風。早盤追高之極速點火極度容易遭遇主力短沖『拉高隔日沖倒貨』，強烈建議關閉自動巡航，維持最高防禦空手狀態。")
 

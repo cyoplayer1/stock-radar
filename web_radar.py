@@ -46,13 +46,7 @@ st.markdown("""
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": UA}
 
-try:
-    FUGLE_API_KEY = st.secrets["FUGLE_API_KEY"]
-except (FileNotFoundError, KeyError):
-    FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
-
 # === 2. 外部設定檔掛載 ===
-CONFIG_FILE = "system_config.json"
 DEFAULT_STOCKS = {
     "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科", "2308.TW": "台達電",
     "3661.TW": "世芯KY", "3034.TW": "聯詠", "2382.TW": "廣達", "3231.TW": "緯創", 
@@ -60,18 +54,11 @@ DEFAULT_STOCKS = {
 }
 DEFAULT_SECTORS = {"2330": "半導體", "2317": "AI伺服器", "3017": "散熱模組", "2603": "航運", "2881": "金融"}
 
-try:
-    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-        config_data = json.load(f)
-    STOCKS_DICT = config_data.get("STOCKS_DICT", DEFAULT_STOCKS)
-    SECTOR_MAP = config_data.get("SECTOR_MAP", DEFAULT_SECTORS)
-except:
-    STOCKS_DICT = DEFAULT_STOCKS
-    SECTOR_MAP = DEFAULT_SECTORS
-
+STOCKS_DICT = DEFAULT_STOCKS.copy()
 CLEAN_TO_FULL_MAP = {k.split('.')[0]: k for k in STOCKS_DICT.keys()}
+SECTOR_MAP = DEFAULT_SECTORS.copy()
 
-# === 3. 基礎函數 (網路、資料獲取、技術指標) ===
+# === 3. 基礎函數 (網路、資料獲取) ===
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
 def safe_get_json(url, headers):
     res = requests.get(url, headers=headers, timeout=10, verify=False)
@@ -82,22 +69,64 @@ def safe_get_json_fallback(url, headers):
     try: return safe_get_json(url, headers)
     except: return {}
 
+# 🔥 新增：動態抓取全市場上市櫃股票代號
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_all_tw_stock_data():
+    full_ids = []
+    stock_dict = {}
+    try:
+        tse = safe_get_json_fallback("https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999", HEADERS)
+        if tse and 'tables' in tse:
+            for t in tse['tables']:
+                if '證券代號' in t.get('fields', []) and '證券名稱' in t.get('fields', []):
+                    idx_c = t['fields'].index('證券代號')
+                    idx_n = t['fields'].index('證券名稱')
+                    for row in t['data']:
+                        code = row[idx_c].strip()
+                        name = row[idx_n].strip()
+                        if len(code) == 4 and code.isdigit():
+                            full_ids.append(f"{code}.TW")
+                            stock_dict[f"{code}.TW"] = name
+                            stock_dict[code] = name
+    except: pass
+    try:
+        otc = safe_get_json_fallback("https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json", HEADERS)
+        data_otc = otc.get('aaData', []) or (otc.get('tables', [{}])[0].get('data', []) if 'tables' in otc else [])
+        for row in data_otc:
+            code = str(row[0]).strip()
+            name = str(row[1]).strip()
+            if len(code) == 4 and code.isdigit():
+                full_ids.append(f"{code}.TWO")
+                stock_dict[f"{code}.TWO"] = name
+                stock_dict[code] = name
+    except: pass
+    
+    if not full_ids:
+        return list(DEFAULT_STOCKS.keys()), DEFAULT_STOCKS.copy()
+    return full_ids, stock_dict
+
+# V14：優化大數據批次下載，防止 1700 檔股票卡死
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_bulk_yf_data(full_ticker_list, period="1y"):
     valid_tickers = [t for t in full_ticker_list if t]
     if not valid_tickers: return {}
-    try:
-        data = yf.download(" ".join(valid_tickers), period=period, threads=True, progress=False)
-        res_dict = {}
-        if len(valid_tickers) == 1:
-            df_t = data.dropna(subset=['Close'])
-            if not df_t.empty: res_dict[valid_tickers[0]] = df_t
-        else:
-            for t in valid_tickers:
-                df_t = pd.DataFrame({'Open': data['Open'][t], 'High': data['High'][t], 'Low': data['Low'][t], 'Close': data['Close'][t], 'Volume': data['Volume'][t]}).dropna(subset=['Close'])
-                if not df_t.empty: res_dict[t] = df_t
-        return res_dict
-    except: return {}
+    res_dict = {}
+    chunk_size = 400 # 將 1700 檔切塊，避免 URL 過長或記憶體卡死
+    for i in range(0, len(valid_tickers), chunk_size):
+        chunk = valid_tickers[i:i+chunk_size]
+        try:
+            data = yf.download(" ".join(chunk), period=period, threads=True, progress=False)
+            if len(chunk) == 1:
+                df_t = data.dropna(subset=['Close'])
+                if not df_t.empty: res_dict[chunk[0]] = df_t
+            else:
+                for t in chunk:
+                    try:
+                        df_t = pd.DataFrame({'Open': data['Open'][t], 'High': data['High'][t], 'Low': data['Low'][t], 'Close': data['Close'][t], 'Volume': data['Volume'][t]}).dropna(subset=['Close'])
+                        if not df_t.empty: res_dict[t] = df_t
+                    except: pass
+        except: pass
+    return res_dict
 
 # 🌟 KD 與 MACD 指標運算 🌟
 def calculate_kd(df):
@@ -191,7 +220,7 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 4. 雷達分析核心引擎 (加入假突破防禦) ===
+# === 4. 雷達分析核心引擎 (內建假突破防禦) ===
 
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
     try:
@@ -199,7 +228,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         if df.empty or len(df) < 65: return None
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5 = df['Volume'].iloc[-6:-1].mean()
-        if v5 < 1000000: return None
+        if v5 < 500000: return None # 排除過度冷門股
         
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
@@ -250,7 +279,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
         if df.empty or len(df) < 60: return None
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5_avg = df['Volume'].iloc[-6:-1].mean()
-        if v5_avg < 1000000: return None 
+        if v5_avg < 500000: return None 
 
         df['5MA'] = df['Close'].rolling(5).mean()
         df['10MA'] = df['Close'].rolling(10).mean()
@@ -268,7 +297,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
 
         if is_three_line_bull and is_macd_above_zero and is_macd_golden:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
-            if is_false_breakout: return None # 留下長上影線，直接過濾剔除
+            if is_false_breakout: return None # 直接過濾剔除假突破
             
             prev_bull = (df['5MA'].iloc[-2] > df['10MA'].iloc[-2] > df['20MA'].iloc[-2])
             prev_zero = (df['DIF'].iloc[-2] > 0) and (df['MACD'].iloc[-2] > 0)
@@ -289,7 +318,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
         if df.empty or len(df) < 60: return None
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5_avg = df['Volume'].iloc[-6:-1].mean()
-        if v5_avg < 1000000: return None
+        if v5_avg < 500000: return None
         
         recent_10d_high = df['High'].iloc[-11:-1].max()
         recent_10d_low = df['Low'].iloc[-11:-1].min()
@@ -310,7 +339,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
 
         if is_bull_trend and is_tight and is_breaking_high and is_vol_boom:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
-            if is_false_breakout: return None # 嚴格防範假突破，直接過濾剔除
+            if is_false_breakout: return None # 嚴格防範假突破
 
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
@@ -403,7 +432,12 @@ def us_market_brain():
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V13.2 假突破防禦版")
+    st.caption("版本：V14.0 全市場掃描旗艦版")
+    st.divider()
+
+    # 🔥 掃描範圍選擇器 (全市場 vs 自選庫)
+    st.subheader("🎯 掃描範圍設定")
+    scan_mode = st.radio("雷達引擎掃描目標：", ["自選監控庫 (快速)", "全市場上市櫃 (約1700檔)"], help="全市場掃描約需 1-2 分鐘，請耐心等候。")
     st.divider()
 
     main_page = st.radio("導航選單", [
@@ -431,17 +465,25 @@ with st.sidebar:
         us_market_brain()
 
 
-# === 8. 處理全域變數與自選名單 ===
+# === 8. 動態切換掃描全域變數 ===
 if 'watch_list' not in st.session_state:
-    st.session_state.watch_list = list(CLEAN_TO_FULL_MAP.keys())
-s_list = st.session_state.watch_list
+    st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
+
+if scan_mode == "全市場上市櫃 (約1700檔)":
+    all_ids, all_dict = get_all_tw_stock_data()
+    STOCKS_DICT.update(all_dict)
+    for k in all_ids:
+        CLEAN_TO_FULL_MAP[k.split('.')[0]] = k
+    s_list = [k.split('.')[0] for k in all_ids]
+else:
+    s_list = st.session_state.watch_list
 
 
 # ==========================================
 # 分頁 1: 🎯 多頭獵殺
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
-    st.title("🎯 多方飆股獵殺雷達")
+    st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
     st.info("💡 **防禦升級**：本雷達已加裝「上影線防禦機制」，一旦發現盤中帶量假突破拉高出貨，系統將自動剔除或標記紅燈警告！")
     
     if is_bearish: 
@@ -456,13 +498,13 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         inst_map = get_inst_data()
         hot_list = get_hot_rank_ids()
         results = []
-        progress_bar = st.progress(0, text="📡 正在從雲端載入數據...")
+        progress_bar = st.progress(0, text=f"📡 正在從雲端載入 {len(s_list)} 檔標的數據 (全市場掃描較久請稍候)...")
         
         full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
         bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
         valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
         
-        progress_bar.progress(30, text="🧠 啟動 AI 演算法交叉比對中 (假突破濾網已開啟)...")
+        progress_bar.progress(50, text="🧠 啟動 AI 演算法交叉比對中 (假突破濾網已開啟)...")
         
         with ThreadPoolExecutor(max_workers=5) as ex:
             if btn_star:
@@ -473,7 +515,7 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                 futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
             
             for i, f in enumerate(as_completed(futs)):
-                progress_bar.progress(30 + int(70 * (i+1)/len(valid_list)))
+                progress_bar.progress(50 + int(50 * (i+1)/len(valid_list)))
                 if f.result(): results.append(f.result())
                 
         progress_bar.empty()
@@ -563,13 +605,13 @@ elif main_page == "🔥 全市場金流榜":
 # 分頁 2: 📉 斷頭防護
 # ==========================================
 elif main_page == "📉 斷頭防護 (空方破底)":
-    st.title("📉 弱勢避雷針 (空方引擎)")
+    st.title(f"📉 弱勢避雷針 (空方引擎) - {scan_mode}")
     st.info("💡 **白話文說明**：小心駛得萬年船！這裡幫你揪出「均線下彎、跌破近期低點，而且法人還在瘋狂倒貨」的危險股。手上有這些股票請考慮停損；若是放空高手，這裡就是你的標的池。")
 
     if st.button("☠️ 啟動地雷股掃描", use_container_width=True, type="primary"):
         inst_map = get_inst_data()
         results = []
-        progress_text = "📡 搜尋全市場地雷中..."
+        progress_text = f"📡 搜尋全市場地雷中 ({len(s_list)} 檔)..."
         my_bar = st.progress(0, text=progress_text)
         
         full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
@@ -602,7 +644,7 @@ elif main_page == "📉 斷頭防護 (空方破底)":
                 }
             )
         else:
-            st.success("✅ 太棒了！你的自選名單中目前沒有岌岌可危的斷頭股。")
+            st.success("✅ 太棒了！你的掃描名單中目前沒有岌岌可危的斷頭股。")
 
 # ==========================================
 # 分頁 3: 📊 股神專屬看盤室
@@ -654,7 +696,7 @@ elif main_page == "🌐 全球戰情與總經":
 # ==========================================
 elif main_page == "⚙️ 自選庫與設定":
     st.title("⚙️ 系統設定與自選名單管理")
-    st.info("💡 **白話文說明**：雷達系統會掃描這裡的股票清單。你可以隨時增加或刪除你要關注的股票代號，記得用半形逗號 `,` 隔開。")
+    st.info("💡 **白話文說明**：當雷達設定為【自選監控庫】時，會掃描這裡的股票清單。你可以隨時增加或刪除你要關注的股票代號，記得用半形逗號 `,` 隔開。")
     
     def_tickers = ", ".join(st.session_state.watch_list)
     new_input = st.text_area("📝 您的監控代號庫：", value=def_tickers, height=150)

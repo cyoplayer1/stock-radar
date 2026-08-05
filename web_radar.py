@@ -13,10 +13,6 @@ import urllib3
 import os
 import json
 import numpy as np
-from gtts import gTTS
-import io
-import asyncio
-import aiohttp
 
 # === 升級套件：斷線重連避震器 ===
 try:
@@ -24,17 +20,12 @@ try:
 except ImportError:
     st.error("⚠️ 缺少 tenacity 套件，請執行: pip install tenacity")
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st_autorefresh = None
-
 # === 1. 系統環境設定與版面美化 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="阿綜專屬：極簡智能雷達", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
-# 🎨 注入客製化 CSS (提升精緻度)
+# 🎨 注入客製化 CSS (提升精緻度，匹配台股紅綠習慣)
 st.markdown("""
 <style>
     /* 調整主標題風格 */
@@ -42,7 +33,7 @@ st.markdown("""
     h2, h3 { color: #00CC96; }
     /* 數據卡片 (Metric) 美化 */
     div[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; color: #FFFFFF; }
-    div[data-testid="stMetricDelta"] { font-size: 1rem; }
+    div[data-testid="stMetricDelta"] { font-size: 1rem; font-weight: bold; }
     /* 按鈕圓角與懸停動效 */
     .stButton>button { border-radius: 8px; font-weight: 600; transition: all 0.3s ease; border: 1px solid #444; }
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(255, 209, 102, 0.3); border-color: #FFD166; color: #FFD166; }
@@ -72,19 +63,15 @@ DEFAULT_STOCKS = {
     "3661.TW": "世芯KY", "3034.TW": "聯詠", "2382.TW": "廣達", "3231.TW": "緯創", 
     "3017.TW": "奇鋐", "3324.TW": "雙鴻", "2603.TW": "長榮", "2881.TW": "富邦金"
 }
-DEFAULT_SECTORS = {"2330": "半導體", "2317": "AI伺服器", "3017": "散熱模組", "2603": "航運", "2881": "金融"}
 
 try:
     with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
         config_data = json.load(f)
     STOCKS_DICT = config_data.get("STOCKS_DICT", DEFAULT_STOCKS)
-    SECTOR_MAP = config_data.get("SECTOR_MAP", DEFAULT_SECTORS)
 except:
     STOCKS_DICT = DEFAULT_STOCKS
-    SECTOR_MAP = DEFAULT_SECTORS
 
 CLEAN_TO_FULL_MAP = {k.split('.')[0]: k for k in STOCKS_DICT.keys()}
-MAINTENANCE_LOG_FILE = "trade_maintenance_log.csv"
 
 # === 3. 基礎函數 (網路、資料獲取、技術指標) ===
 @retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
@@ -114,18 +101,6 @@ def fetch_bulk_yf_data(full_ticker_list, period="1y"):
         return res_dict
     except: return {}
 
-def calculate_kd(df):
-    if len(df) < 9: return df
-    df['9_min'] = df['Low'].rolling(window=9).min()
-    df['9_max'] = df['High'].rolling(window=9).max()
-    df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
-    k_v, d_v, k, d = [], [], 50.0, 50.0
-    for rsv in df['RSV']:
-        if pd.isna(rsv): k_v.append(50.0); d_v.append(50.0)
-        else: k = (2/3)*k + (1/3)*rsv; d = (2/3)*d + (1/3)*k; k_v.append(k); d_v.append(d)
-    df['K'], df['D'] = k_v, d_v
-    return df
-
 def calculate_macd(df):
     df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
     df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
@@ -141,7 +116,8 @@ def get_market_breadth():
         if not df.empty:
             df['MA20'] = df['Close'].rolling(20).mean()
             c, m20 = df['Close'].iloc[-1], df['MA20'].iloc[-1]
-            status = "🟢 偏多環境 (積極操作)" if c > m20 else "🔴 偏空環境 (嚴格控管)"
+            # 台股習慣：偏多為紅色(🟥)，偏空為綠色(🟩)
+            status = "🟥 偏多環境 (站上月線，積極操作)" if c > m20 else "🟩 偏空環境 (跌破月線，嚴格控管)"
             return round(c, 2), round(m20, 2), status
     except: pass
     return None, None, "⚪ 系統連線中"
@@ -166,7 +142,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
         if df.empty or len(df) < 60: return None
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5_avg = df['Volume'].iloc[-6:-1].mean()
-        if v5_avg < 1000000: return None # 排除成交量太小的
+        if v5_avg < 1000000: return None 
 
         df['5MA'] = df['Close'].rolling(5).mean()
         df['10MA'] = df['Close'].rolling(10).mean()
@@ -187,7 +163,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
                 '收盤價': round(c, 2), '型態': "🔥 剛觸發：三線+零軸" if is_fresh else "🌟 續強：三線+零軸",
-                '法人買超': inst_map.get(clean_id, 0)
+                '法人買賣超(張)': inst_map.get(clean_id, 0)
             }
     except: return None
 
@@ -216,7 +192,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
                 '收盤價': round(c, 2), '型態': "🚀 壓縮突破 (旱地拔蔥)", 
-                '法人買超': inst_map.get(clean_id, 0)
+                '法人買賣超(張)': inst_map.get(clean_id, 0)
             }
     except: return None
 
@@ -236,7 +212,7 @@ def bearish_breakdown_scanner(clean_id, df_ticker, full_id, inst_map):
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
                 '收盤價': round(c, 2), '型態': "☠️ 均線下彎+破底", 
-                '法人買超': inst_val
+                '法人買賣超(張)': inst_val
             }
     except: return None
 
@@ -255,16 +231,16 @@ def plot_beautiful_chart(symbol):
         df = calculate_macd(df)
         df.dropna(inplace=True)
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            vertical_spacing=0.03, row_width=[0.3, 0.7])
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.3, 0.7])
 
-        # K線與均線
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'), row=1, col=1)
+        # K線與均線 (台股配色：上漲紅 #FF4B4B，下跌綠 #00CC96)
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', 
+                                     increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['5MA'], mode='lines', name='5MA', line=dict(color='#FFD166', width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['10MA'], mode='lines', name='10MA', line=dict(color='#118AB2', width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['20MA'], mode='lines', name='20MA', line=dict(color='#EF476F', width=2)), row=1, col=1)
 
-        # MACD 副圖
+        # MACD 副圖 (台股配色：紅柱大於零，綠柱小於零)
         colors = np.where(df['Hist'] > 0, '#FF4B4B', '#00CC96')
         fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name='MACD柱', marker_color=colors), row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], mode='lines', name='DIF', line=dict(color='#FFD166')), row=2, col=1)
@@ -277,11 +253,33 @@ def plot_beautiful_chart(symbol):
     except Exception as e:
         st.error(f"繪圖發生錯誤: {e}")
 
-# === 6. 側邊欄 (Sidebar) UI ===
+# === 6. 美股與市場關聯函數 ===
+def us_market_brain():
+    us_tickers = {
+        "TSM": "台積電 ADR", "ARM": "安謀", "AAPL": "蘋果", 
+        "MSFT": "微軟", "GOOG": "谷歌", "NVDA": "輝達", 
+        "META": "Meta", "TSLA": "特斯拉", "SKHY": "SK海力士"
+    }
+    for ticker, name in us_tickers.items():
+        try:
+            df = yf.Ticker(ticker).history(period="5d")
+            if not df.empty and len(df) >= 2:
+                close_today = df['Close'].iloc[-1]
+                close_yest = df['Close'].iloc[-2]
+                change = ((close_today - close_yest) / close_yest) * 100
+                # inverse: 正值變紅色，負值變綠色 (符合台灣股市習慣)
+                st.metric(f"{name} ({ticker})", f"${close_today:.2f}", f"{change:.2f}%", delta_color="inverse")
+            else: 
+                st.metric(name, "N/A", "-")
+        except: 
+            st.metric(name, "Error", "-")
+
+
+# === 7. 側邊欄 (Sidebar) UI ===
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60) # 裝飾用圖標
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V13 UI 優化版")
+    st.caption("版本：V13 台股專屬紅綠版")
     st.divider()
 
     # 收納導覽選單
@@ -297,11 +295,12 @@ with st.sidebar:
     
     # 資訊區塊 (使用 expander 收納以保持清爽)
     tw_c, tw_m20, tw_status = get_market_breadth()
-    is_bearish = "🔴" in tw_status
+    is_bearish = "🟩" in tw_status # 偏空為綠色
     
     with st.expander("🌍 大盤即時風向", expanded=True):
         if tw_c:
-            st.metric("加權指數", f"{tw_c:,.0f}", delta=f"{tw_c - tw_m20:,.0f} (距月線)")
+            # 確保上漲/強勢指標顯示紅色
+            st.metric("加權指數", f"{tw_c:,.0f}", delta=f"{tw_c - tw_m20:,.0f} (距月線)", delta_color="inverse")
             st.markdown(f"**狀態：** {tw_status}")
         else:
             st.warning("大盤連線中...")
@@ -309,10 +308,12 @@ with st.sidebar:
     with st.expander("🌐 美股連動指標", expanded=False):
         us_market_brain()
 
-# === 7. 處理全域變數與自選名單 ===
+
+# === 8. 處理全域變數與自選名單 ===
 if 'watch_list' not in st.session_state:
     st.session_state.watch_list = list(CLEAN_TO_FULL_MAP.keys())
 s_list = st.session_state.watch_list
+
 
 # ==========================================
 # 分頁 1: 🎯 多頭獵殺 (將六星雷達、飆股結合)
@@ -353,22 +354,30 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         
         if results:
             st.success(f"🎯 漂亮！成功為你捕捉到 **{len(results)}** 檔強勢標的。")
-            df_res = pd.DataFrame(results).sort_values(by='法人買超', ascending=False)
+            df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=False)
             
-            # 建立精美的 DataFrame 欄位設定
+            # 使用 Dataframe Styling，讓數值顯示更直覺
+            def color_positive_red_negative_green(val):
+                if isinstance(val, (int, float)):
+                    if val > 0: return 'color: #FF4B4B; font-weight: bold;'
+                    elif val < 0: return 'color: #00CC96; font-weight: bold;'
+                return ''
+
+            styled_df = df_res.style.map(color_positive_red_negative_green, subset=['法人買賣超(張)'])
+            
             st.dataframe(
-                df_res, 
+                styled_df, 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
                     "代號": st.column_config.TextColumn("代號", width="small"),
                     "名稱": st.column_config.TextColumn("名稱", width="medium"),
                     "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f", width="small"),
-                    "法人買超": st.column_config.NumberColumn("大戶籌碼 (張)", help="外資與投信單日買賣超合計"),
+                    "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼 (張)", help="外資與投信單日買賣超合計"),
                 }
             )
             st.toast("雷達掃描完畢！", icon="✅")
-            st.balloons() # 增加成就感
+            st.balloons()
         else:
             st.warning("👀 目前盤面靜悄悄，沒有符合嚴格過濾條件的標的。請保持耐心，空手也是一種操作。")
 
@@ -399,13 +408,19 @@ elif main_page == "📉 斷頭防護 (空方破底)":
         
         if results:
             st.error(f"🚨 警告！發現 **{len(results)}** 檔具備高下市/崩跌風險的股票！")
-            df_res = pd.DataFrame(results).sort_values(by='法人買超', ascending=True)
+            df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=True)
+            
+            def color_negative_green(val):
+                if isinstance(val, (int, float)) and val < 0:
+                    return 'color: #00CC96; font-weight: bold;'
+                return ''
+
             st.dataframe(
-                df_res, 
+                df_res.style.map(color_negative_green, subset=['法人買賣超(張)']), 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "法人買超": st.column_config.NumberColumn("法人大逃亡 (張)", format="%d"),
+                    "法人買賣超(張)": st.column_config.NumberColumn("法人大逃亡 (張)", format="%d"),
                 }
             )
         else:
@@ -424,7 +439,7 @@ elif main_page == "📊 股神專屬看盤室":
         btn_draw = st.button("📈 繪製高解析度圖表", use_container_width=True, type="primary")
         
         st.markdown("---")
-        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紅線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅，且兩條線爬上白色虛線。")
+        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紅線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上白色虛線。")
         
     with col2:
         if btn_draw:
@@ -439,6 +454,7 @@ elif main_page == "🌐 全球戰情與總經":
     st.info("💡 **白話文說明**：股市不是只看個股。這裡幫你把台股大盤、匯率、美股動向等「大環境」數據整合在一起，大風向對了，賺錢才輕鬆。")
 
     col1, col2, col3 = st.columns(3)
+    # inverse: 讓數值變大變紅、變小變綠
     col1.metric("台幣匯率 (貶值不利台股)", "32.45", "-0.15", delta_color="inverse", help="匯率貶值通常代表外資將錢匯出台灣。")
     col2.metric("VIX 恐慌指數", "18.5", "1.2", delta_color="inverse", help="超過 20 代表市場開始恐慌。")
     col3.metric("美債殖利率", "4.11%", "0.05%", delta_color="inverse", help="無風險利率上升，對科技股估值有壓抑作用。")
@@ -448,7 +464,8 @@ elif main_page == "🌐 全球戰情與總經":
         twii_df = yf.Ticker("^TWII").history(period="3mo")
         twii_df['MA20'] = twii_df['Close'].rolling(20).mean()
         fig = make_subplots(rows=1, cols=1)
-        fig.add_trace(go.Candlestick(x=twii_df.index, open=twii_df['Open'], high=twii_df['High'], low=twii_df['Low'], close=twii_df['Close'], name="大盤"))
+        fig.add_trace(go.Candlestick(x=twii_df.index, open=twii_df['Open'], high=twii_df['High'], low=twii_df['Low'], close=twii_df['Close'], name="大盤",
+                                     increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'))
         fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['MA20'], line=dict(color='#FFD166'), name="月線"))
         fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0), height=400)
         st.plotly_chart(fig, use_container_width=True)

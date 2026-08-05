@@ -765,75 +765,6 @@ def run_simple_backtest(symbol):
         return df, win_rate, total_return
     except: return None
 
-# === 11. 經理人籌碼追蹤 ===
-def fetch_today_holdings_from_api(etf_code="00981A"):
-    today = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
-    new_data = []
-    res = safe_get_json_fallback(f"https://www.twse.com.tw/fund/ETF8?response=json&code={etf_code}", HEADERS)
-    if res and 'data' in res and len(res['data']) > 0:
-        for row in res['data']:
-            new_data.append([today, str(row[0]).strip(), str(row[1]).strip(), int(row[2].replace(',', '')) // 1000])
-    return pd.DataFrame(new_data, columns=['日期', '代號', '股票名稱', '持有張數'])
-
-def get_00981a_holdings_history(force_refresh=False):
-    db_path = "00981A_holdings_db.csv"
-    today_str = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
-    if os.path.exists(db_path): df_history = pd.read_csv(db_path)
-    else: df_history = pd.DataFrame(columns=['日期', '代號', '股票名稱', '持有張數'])
-        
-    if not df_history.empty and today_str in df_history['日期'].values and not force_refresh: return df_history
-    if force_refresh and not df_history.empty: df_history = df_history[df_history['日期'] != today_str]
-            
-    with st.spinner("🔄 正在從連線獲取經理人今日最新持股..."):
-        df_today = fetch_today_holdings_from_api("00981A")
-        
-    if not df_today.empty:
-        df_history = pd.concat([df_history, df_today], ignore_index=True)
-        df_history.to_csv(db_path, index=False)
-        st.toast("✅ 今日持股資料已更新入庫！", icon="🎉")
-    elif df_history.empty:
-        dates = [(datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8))) - datetime.timedelta(days=i)).strftime('%Y-%m-%d') for i in range(3, -1, -1)]
-        mock_scenarios = [
-            ("2317", "鴻海", [1000, 1500, 2000, 3000]), ("3231", "緯創", [2000, 2000, 2000, 3500]),
-            ("2383", "台光電", [3000, 3000, 3500, 4200]), ("6805", "富世達", [200, 400, 800, 1500]), 
-            ("3017", "奇鋐", [800, 800, 1200, 1800]), ("2345", "智邦", [1000, 1200, 1500, 1900]),
-            ("3533", "嘉澤", [600, 600, 700, 900]), ("2330", "台積電", [8000, 8000, 8000, 8000]),
-            ("2454", "聯發科", [1500, 1500, 1500, 1500]), ("3324", "雙鴻", [500, 500, 500, 500]),
-            ("2308", "台達電", [5000, 5200, 5500, 4500]), ("2382", "廣達", [4000, 4000, 3000, 2000]),
-            ("3034", "聯詠", [1000, 1000, 800, 500]), ("2603", "長榮", [5000, 4000, 3000, 2000]),
-            ("3661", "世芯-KY", [400, 400, 400, 200])
-        ]
-        dummy_rows = []
-        for ticker, name, shares in mock_scenarios:
-            for i, d in enumerate(dates): dummy_rows.append([d, ticker, f"{name} (測試)", shares[i]])
-        return pd.DataFrame(dummy_rows, columns=['日期', '代號', '股票名稱', '持有張數'])
-    return df_history
-
-def analyze_manager_moves(df):
-    if df.empty: return pd.DataFrame()
-    df = df.sort_values(by=['代號', '日期'])
-    df['單日買賣超(張)'] = df.groupby('代號')['持有張數'].diff().fillna(0)
-    results = []
-    for stock_id, group in df.groupby('代號'):
-        group = group.sort_values('日期')
-        diffs = group['單日買賣超(張)'].tolist()
-        consecutive_buy = sum(1 for d in reversed(diffs) if d > 0) if diffs[-1] > 0 else 0
-        consecutive_sell = sum(1 for d in reversed(diffs) if d < 0) if diffs[-1] < 0 else 0
-        latest_record = group.iloc[-1]
-        
-        if consecutive_buy > 0: status, days = "🟢 主力連買", consecutive_buy
-        elif consecutive_sell > 0: status, days = "🔴 經理人倒貨", consecutive_sell
-        else: status, days = "⚪ 靜止觀望", 0
-        
-        results.append({
-            "代號": stock_id, "股票名稱": latest_record['股票名稱'], 
-            "看盤連結": f"https://tw.stock.yahoo.com/quote/{stock_id}/technical-analysis",
-            "最新持股張數": int(latest_record['持有張數']),
-            "今日買賣超(張)": int(latest_record['單日買賣超(張)']), "動向狀態": status, "連續天數": days,
-            "連續天數顯示": f"{days} 天" if days > 0 else "-"
-        })
-    return pd.DataFrame(results).sort_values(by="今日買賣超(張)", ascending=False)
-
 # === 12. 早盤渦輪截擊雷達 ===
 async def fetch_fugle_intraday_async(session, clean_id, prev_vol, full_name, is_test_mode):
     try:
@@ -905,7 +836,6 @@ main_page = st.sidebar.radio("跳轉頁面", [
     "🌐 全球金融戰情室",
     "🤝 土洋主力共振雷達", 
     "🏢 基本面與 AI 診斷", 
-    "🕵️‍♂️ 00981A 經理人跟單雷達",
     "☠️ 隔日沖分點照妖鏡",
     "🚀 早盤渦輪截擊"
 ])
@@ -1094,7 +1024,7 @@ if main_page == "🎯 股神六星雷達系統":
                 else: st.warning("👀 無符合飆股型態標的。")
 
 # ==========================================
-# 分頁 1.5: 📈 股神三線零軸 (新增：宇明流專屬雷達)
+# 分頁 1.5: 📈 股神三線零軸 (宇明流專屬雷達)
 # ==========================================
 elif main_page == "📈 股神三線零軸 (宇明流)":
     st.title("📈 股神三線零軸雷達 (宇明流還原版)")
@@ -1299,29 +1229,7 @@ elif main_page == "🏢 基本面與 AI 診斷":
         st.info(ai_news_sentiment(news_list))
 
 # ==========================================
-# 分頁 6: 🕵️‍♂️ 00981A 經理人跟單雷達
-# ==========================================
-elif main_page == "🕵️‍♂️ 00981A 經理人跟單雷達":
-    st.title("🕵️‍♂️ 00981A 經理人跟單雷達")
-    force_refresh = st.button("🔄 強制重新抓取今日籌碼")
-    analyzed_df = analyze_manager_moves(get_00981a_holdings_history(force_refresh=force_refresh))
-    if not analyzed_df.empty:
-        with st.spinner("⚡ 正在獲取最新股價..."):
-            inst_map, hot_list, star_dict, price_dict = get_inst_data(), get_hot_rank_ids(), {}, {}
-            bulk_data_dict = fetch_bulk_yf_data([CLEAN_TO_FULL_MAP.get(str(row['代號']), f"{row['代號']}.TW") for _, row in analyzed_df.iterrows()], period="1y")
-            with ThreadPoolExecutor(max_workers=8) as ex:
-                futs = {ex.submit(analyze_stock_score_v2, str(row['代號']), bulk_data_dict.get(CLEAN_TO_FULL_MAP.get(str(row['代號']), f"{row['代號']}.TW")), CLEAN_TO_FULL_MAP.get(str(row['代號']), f"{row['代號']}.TW"), inst_map, hot_list, is_bearish): str(row['代號']) for _, row in analyzed_df.iterrows() if CLEAN_TO_FULL_MAP.get(str(row['代號']), f"{row['代號']}.TW") in bulk_data_dict}
-                for f in as_completed(futs):
-                    t, res = futs[f], f.result()
-                    if res: star_dict[t], price_dict[t] = res['星等'], res['收盤']
-                    else: star_dict[t], price_dict[t] = "💤 盤整", fetch_fast_price(t)
-            
-            analyzed_df.insert(2, '最新收盤價', analyzed_df['代號'].map(price_dict))
-            analyzed_df.insert(3, '六星技術評等', analyzed_df['代號'].map(star_dict))
-            st.dataframe(analyzed_df[['代號', '股票名稱', '最新收盤價', '今日買賣超(張)', '動向狀態', '六星技術評等']], use_container_width=True, hide_index=True)
-
-# ==========================================
-# 分頁 7: ☠️ 隔日沖分點照妖鏡
+# 分頁 6: ☠️ 隔日沖分點照妖鏡
 # ==========================================
 elif main_page == "☠️ 隔日沖分點照妖鏡":
     st.title("☠️ 隔日沖分點照妖鏡")
@@ -1331,7 +1239,7 @@ elif main_page == "☠️ 隔日沖分點照妖鏡":
         st.dataframe(pd.DataFrame({"券商分點": ["凱基-台北", "台灣匯立", "摩根大通", "美林", "元大-土城永寧"], "買進張數": [4500, 3200, 2800, 2100, 1800], "賣出張數": [100, 50, 200, 500, 0]}), use_container_width=True, hide_index=True)
 
 # ==========================================
-# 分頁 8: 🚀 早盤渦輪截擊
+# 分頁 7: 🚀 早盤渦輪截擊
 # ==========================================
 elif main_page == "🚀 早盤渦輪截擊":
     st.title("🚀 早盤渦輪截擊雷達 (9:00-9:30 專用)")

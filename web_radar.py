@@ -23,25 +23,33 @@ except ImportError:
 # === 1. 系統環境設定與版面美化 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# 這裡不強制綁定 Dark Theme，讓使用者可以自由切換，預設由瀏覽器決定
 st.set_page_config(page_title="阿綜專屬：極簡智能雷達", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
-# 🎨 注入客製化 CSS (提升精緻度，匹配台股紅綠習慣)
+# 🎨 注入客製化 CSS (調亮側邊欄與文字顏色)
 st.markdown("""
 <style>
-    /* 調整主標題風格 */
-    h1 { color: #FFD166; font-weight: 800; font-family: 'Helvetica Neue', sans-serif; text-shadow: 1px 1px 2px rgba(0,0,0,0.5); }
-    h2, h3 { color: #00CC96; }
-    /* 數據卡片 (Metric) 美化 */
-    div[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; color: #FFFFFF; }
+    /* 調整主標題風格，改用較深的藍色系讓淺色背景下更清楚 */
+    h1 { color: #1E3A8A; font-weight: 800; font-family: 'Helvetica Neue', sans-serif; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
+    h2, h3 { color: #009688; }
+    
+    /* 數據卡片 (Metric) 美化，確保淺色模式下字體顏色正常 */
+    div[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; color: #333333; }
     div[data-testid="stMetricDelta"] { font-size: 1rem; font-weight: bold; }
+    
     /* 按鈕圓角與懸停動效 */
-    .stButton>button { border-radius: 8px; font-weight: 600; transition: all 0.3s ease; border: 1px solid #444; }
-    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(255, 209, 102, 0.3); border-color: #FFD166; color: #FFD166; }
+    .stButton>button { border-radius: 8px; font-weight: 600; transition: all 0.3s ease; border: 1px solid #ccc; background-color: #f8f9fa; color: #333;}
+    .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1); border-color: #009688; color: #009688; }
+    
     /* 主要按鈕特化 */
     .stButton>button[kind="primary"] { background: linear-gradient(90deg, #FF4B4B, #FF7B7B); color: white; border: none; }
-    .stButton>button[kind="primary"]:hover { background: linear-gradient(90deg, #FF7B7B, #FF4B4B); box-shadow: 0 5px 15px rgba(255, 75, 75, 0.5); color: white; }
-    /* 側邊欄優化 */
-    section[data-testid="stSidebar"] { background-color: #16181c; border-right: 1px solid #333; }
+    .stButton>button[kind="primary"]:hover { background: linear-gradient(90deg, #FF7B7B, #FF4B4B); box-shadow: 0 5px 15px rgba(255, 75, 75, 0.3); color: white; }
+    
+    /* 側邊欄優化：調亮為淺銀灰色，不再是純黑 */
+    section[data-testid="stSidebar"] { background-color: #f1f3f5; border-right: 1px solid #e0e0e0; }
+    /* 側邊欄文字顏色 */
+    section[data-testid="stSidebar"] * { color: #333333 !important; }
+    
     /* 隱藏預設的主選單與 footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -116,7 +124,6 @@ def get_market_breadth():
         if not df.empty:
             df['MA20'] = df['Close'].rolling(20).mean()
             c, m20 = df['Close'].iloc[-1], df['MA20'].iloc[-1]
-            # 台股習慣：偏多為紅色(🟥)，偏空為綠色(🟩)
             status = "🟥 偏多環境 (站上月線，積極操作)" if c > m20 else "🟩 偏空環境 (跌破月線，嚴格控管)"
             return round(c, 2), round(m20, 2), status
     except: pass
@@ -233,21 +240,22 @@ def plot_beautiful_chart(symbol):
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.3, 0.7])
 
-        # K線與均線 (台股配色：上漲紅 #FF4B4B，下跌綠 #00CC96)
+        # K線與均線 (改用淺色背景：plotly_white)
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', 
                                      increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['5MA'], mode='lines', name='5MA', line=dict(color='#FFD166', width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['10MA'], mode='lines', name='10MA', line=dict(color='#118AB2', width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['20MA'], mode='lines', name='20MA', line=dict(color='#EF476F', width=2)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['5MA'], mode='lines', name='5MA', line=dict(color='#F59E0B', width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['10MA'], mode='lines', name='10MA', line=dict(color='#3B82F6', width=1.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['20MA'], mode='lines', name='20MA', line=dict(color='#8B5CF6', width=2)), row=1, col=1)
 
-        # MACD 副圖 (台股配色：紅柱大於零，綠柱小於零)
+        # MACD 副圖
         colors = np.where(df['Hist'] > 0, '#FF4B4B', '#00CC96')
         fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name='MACD柱', marker_color=colors), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], mode='lines', name='DIF', line=dict(color='#FFD166')), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD', line=dict(color='#118AB2')), row=2, col=1)
-        fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5, row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], mode='lines', name='DIF', line=dict(color='#F59E0B')), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD', line=dict(color='#3B82F6')), row=2, col=1)
+        fig.add_hline(y=0, line_dash="dash", line_color="#E5E7EB", opacity=0.8, row=2, col=1)
 
-        fig.update_layout(height=650, template="plotly_dark", xaxis_rangeslider_visible=False, 
+        # 把 template 改成 plotly_white，背景就會是亮色系的
+        fig.update_layout(height=650, template="plotly_white", xaxis_rangeslider_visible=False, 
                           margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
@@ -267,7 +275,6 @@ def us_market_brain():
                 close_today = df['Close'].iloc[-1]
                 close_yest = df['Close'].iloc[-2]
                 change = ((close_today - close_yest) / close_yest) * 100
-                # inverse: 正值變紅色，負值變綠色 (符合台灣股市習慣)
                 st.metric(f"{name} ({ticker})", f"${close_today:.2f}", f"{change:.2f}%", delta_color="inverse")
             else: 
                 st.metric(name, "N/A", "-")
@@ -277,12 +284,11 @@ def us_market_brain():
 
 # === 7. 側邊欄 (Sidebar) UI ===
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60) # 裝飾用圖標
+    st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V13 台股專屬紅綠版")
+    st.caption("版本：V13 淺色明亮版")
     st.divider()
 
-    # 收納導覽選單
     main_page = st.radio("導航選單", [
         "🎯 多頭獵殺 (突破/起漲)", 
         "📉 斷頭防護 (空方破底)", 
@@ -293,13 +299,11 @@ with st.sidebar:
 
     st.divider()
     
-    # 資訊區塊 (使用 expander 收納以保持清爽)
     tw_c, tw_m20, tw_status = get_market_breadth()
-    is_bearish = "🟩" in tw_status # 偏空為綠色
+    is_bearish = "🟩" in tw_status
     
     with st.expander("🌍 大盤即時風向", expanded=True):
         if tw_c:
-            # 確保上漲/強勢指標顯示紅色
             st.metric("加權指數", f"{tw_c:,.0f}", delta=f"{tw_c - tw_m20:,.0f} (距月線)", delta_color="inverse")
             st.markdown(f"**狀態：** {tw_status}")
         else:
@@ -316,7 +320,7 @@ s_list = st.session_state.watch_list
 
 
 # ==========================================
-# 分頁 1: 🎯 多頭獵殺 (將六星雷達、飆股結合)
+# 分頁 1: 🎯 多頭獵殺
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title("🎯 多方飆股獵殺雷達")
@@ -356,7 +360,6 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
             st.success(f"🎯 漂亮！成功為你捕捉到 **{len(results)}** 檔強勢標的。")
             df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=False)
             
-            # 使用 Dataframe Styling，讓數值顯示更直覺
             def color_positive_red_negative_green(val):
                 if isinstance(val, (int, float)):
                     if val > 0: return 'color: #FF4B4B; font-weight: bold;'
@@ -376,13 +379,12 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                     "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼 (張)", help="外資與投信單日買賣超合計"),
                 }
             )
-            st.toast("雷達掃描完畢！", icon="✅")
             st.balloons()
         else:
             st.warning("👀 目前盤面靜悄悄，沒有符合嚴格過濾條件的標的。請保持耐心，空手也是一種操作。")
 
 # ==========================================
-# 分頁 2: 📉 斷頭防護 (空方破底)
+# 分頁 2: 📉 斷頭防護
 # ==========================================
 elif main_page == "📉 斷頭防護 (空方破底)":
     st.title("📉 弱勢避雷針 (空方引擎)")
@@ -427,7 +429,7 @@ elif main_page == "📉 斷頭防護 (空方破底)":
             st.success("✅ 太棒了！你的自選名單中目前沒有岌岌可危的斷頭股。")
 
 # ==========================================
-# 分頁 3: 📊 股神專屬看盤室 (視覺化圖表)
+# 分頁 3: 📊 股神專屬看盤室
 # ==========================================
 elif main_page == "📊 股神專屬看盤室":
     st.title("📊 專家級無干擾看盤室")
@@ -439,7 +441,7 @@ elif main_page == "📊 股神專屬看盤室":
         btn_draw = st.button("📈 繪製高解析度圖表", use_container_width=True, type="primary")
         
         st.markdown("---")
-        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紅線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上白色虛線。")
+        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紅線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上水平線。")
         
     with col2:
         if btn_draw:
@@ -454,7 +456,6 @@ elif main_page == "🌐 全球戰情與總經":
     st.info("💡 **白話文說明**：股市不是只看個股。這裡幫你把台股大盤、匯率、美股動向等「大環境」數據整合在一起，大風向對了，賺錢才輕鬆。")
 
     col1, col2, col3 = st.columns(3)
-    # inverse: 讓數值變大變紅、變小變綠
     col1.metric("台幣匯率 (貶值不利台股)", "32.45", "-0.15", delta_color="inverse", help="匯率貶值通常代表外資將錢匯出台灣。")
     col2.metric("VIX 恐慌指數", "18.5", "1.2", delta_color="inverse", help="超過 20 代表市場開始恐慌。")
     col3.metric("美債殖利率", "4.11%", "0.05%", delta_color="inverse", help="無風險利率上升，對科技股估值有壓抑作用。")
@@ -466,8 +467,9 @@ elif main_page == "🌐 全球戰情與總經":
         fig = make_subplots(rows=1, cols=1)
         fig.add_trace(go.Candlestick(x=twii_df.index, open=twii_df['Open'], high=twii_df['High'], low=twii_df['Low'], close=twii_df['Close'], name="大盤",
                                      increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'))
-        fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['MA20'], line=dict(color='#FFD166'), name="月線"))
-        fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0), height=400)
+        fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['MA20'], line=dict(color='#3B82F6'), name="月線"))
+        # 大盤圖表也設定為淺色背景 plotly_white
+        fig.update_layout(template="plotly_white", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0), height=400)
         st.plotly_chart(fig, use_container_width=True)
     except:
         st.warning("無法載入大盤走勢圖。")

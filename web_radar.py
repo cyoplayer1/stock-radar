@@ -23,34 +23,21 @@ except ImportError:
 # === 1. 系統環境設定與版面美化 ===
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-# 這裡不強制綁定 Dark Theme，讓使用者可以自由切換，預設由瀏覽器決定
 st.set_page_config(page_title="阿綜專屬：極簡智能雷達", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
-# 🎨 注入客製化 CSS (調亮側邊欄與文字顏色)
+# 🎨 注入客製化 CSS (淺色質感模式 + 台股紅綠配色)
 st.markdown("""
 <style>
-    /* 調整主標題風格，改用較深的藍色系讓淺色背景下更清楚 */
     h1 { color: #1E3A8A; font-weight: 800; font-family: 'Helvetica Neue', sans-serif; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
     h2, h3 { color: #009688; }
-    
-    /* 數據卡片 (Metric) 美化，確保淺色模式下字體顏色正常 */
     div[data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 700; color: #333333; }
     div[data-testid="stMetricDelta"] { font-size: 1rem; font-weight: bold; }
-    
-    /* 按鈕圓角與懸停動效 */
     .stButton>button { border-radius: 8px; font-weight: 600; transition: all 0.3s ease; border: 1px solid #ccc; background-color: #f8f9fa; color: #333;}
     .stButton>button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1); border-color: #009688; color: #009688; }
-    
-    /* 主要按鈕特化 */
     .stButton>button[kind="primary"] { background: linear-gradient(90deg, #FF4B4B, #FF7B7B); color: white; border: none; }
     .stButton>button[kind="primary"]:hover { background: linear-gradient(90deg, #FF7B7B, #FF4B4B); box-shadow: 0 5px 15px rgba(255, 75, 75, 0.3); color: white; }
-    
-    /* 側邊欄優化：調亮為淺銀灰色，不再是純黑 */
     section[data-testid="stSidebar"] { background-color: #f1f3f5; border-right: 1px solid #e0e0e0; }
-    /* 側邊欄文字顏色 */
     section[data-testid="stSidebar"] * { color: #333333 !important; }
-    
-    /* 隱藏預設的主選單與 footer */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -71,13 +58,16 @@ DEFAULT_STOCKS = {
     "3661.TW": "世芯KY", "3034.TW": "聯詠", "2382.TW": "廣達", "3231.TW": "緯創", 
     "3017.TW": "奇鋐", "3324.TW": "雙鴻", "2603.TW": "長榮", "2881.TW": "富邦金"
 }
+DEFAULT_SECTORS = {"2330": "半導體", "2317": "AI伺服器", "3017": "散熱模組", "2603": "航運", "2881": "金融"}
 
 try:
     with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
         config_data = json.load(f)
     STOCKS_DICT = config_data.get("STOCKS_DICT", DEFAULT_STOCKS)
+    SECTOR_MAP = config_data.get("SECTOR_MAP", DEFAULT_SECTORS)
 except:
     STOCKS_DICT = DEFAULT_STOCKS
+    SECTOR_MAP = DEFAULT_SECTORS
 
 CLEAN_TO_FULL_MAP = {k.split('.')[0]: k for k in STOCKS_DICT.keys()}
 
@@ -109,6 +99,19 @@ def fetch_bulk_yf_data(full_ticker_list, period="1y"):
         return res_dict
     except: return {}
 
+# 🌟 回歸的 KD 指標運算 🌟
+def calculate_kd(df):
+    if len(df) < 9: return df
+    df['9_min'] = df['Low'].rolling(window=9).min()
+    df['9_max'] = df['High'].rolling(window=9).max()
+    df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
+    k_v, d_v, k, d = [], [], 50.0, 50.0
+    for rsv in df['RSV']:
+        if pd.isna(rsv): k_v.append(50.0); d_v.append(50.0)
+        else: k = (2/3)*k + (1/3)*rsv; d = (2/3)*d + (1/3)*k; k_v.append(k); d_v.append(d)
+    df['K'], df['D'] = k_v, d_v
+    return df
+
 def calculate_macd(df):
     df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
     df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
@@ -130,6 +133,52 @@ def get_market_breadth():
     return None, None, "⚪ 系統連線中"
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def fetch_top15_ranking():
+    tse_df, otc_df = pd.DataFrame(), pd.DataFrame()
+    def get_tse(date_str=""):
+        res = safe_get_json_fallback(f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&type=ALLBUT0999&date={date_str}", HEADERS)
+        if res and 'tables' in res:
+            for t in res['tables']:
+                if '證券代號' in t.get('fields', []) and '成交金額' in t.get('fields', []):
+                    df = pd.DataFrame(t['data'], columns=t['fields'])
+                    df['v'] = pd.to_numeric(df['成交金額'].str.replace(',',''), errors='coerce')
+                    if not df.empty and df['v'].sum() > 0:
+                        df_sorted = df.sort_values('v', ascending=False).head(30)[['證券代號', '證券名稱', '收盤價', 'v']]
+                        df_sorted.columns = ['證券代號', '證券名稱', '收盤價', '成交金額']
+                        return df_sorted
+        return pd.DataFrame()
+
+    def get_otc(date_str=""):
+        res = safe_get_json_fallback(f"https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json&d={date_str}", HEADERS)
+        data_otc = res.get('aaData', []) or (res.get('tables', [{}])[0].get('data', []) if 'tables' in res else [])
+        if data_otc:
+            df = pd.DataFrame(data_otc)
+            cv = 9 if df.shape[1] >= 10 else df.shape[1] - 2
+            df['v'] = pd.to_numeric(df[cv].astype(str).str.replace(',',''), errors='coerce')
+            if not df.empty and df['v'].sum() > 0:
+                df_sorted = df.sort_values('v', ascending=False).head(30)[[0, 1, 2, 'v']]
+                df_sorted.columns = ['證券代號', '證券名稱', '收盤價', '成交金額']
+                return df_sorted
+        return pd.DataFrame()
+
+    today = datetime.datetime.now(datetime.timezone.utc).astimezone(datetime.timezone(datetime.timedelta(hours=8)))
+    for i in range(7):
+        tse_df = get_tse((today - datetime.timedelta(days=i)).strftime('%Y%m%d') if i > 0 else "")
+        if not tse_df.empty: break
+    for i in range(7):
+        otc_df = get_otc((today - datetime.timedelta(days=i)).strftime(f'{today.year - 1911}/%m/%d') if i > 0 else "")
+        if not otc_df.empty: break
+    return tse_df, otc_df
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_hot_rank_ids():
+    tse_df, otc_df = fetch_top15_ranking()
+    hot_ids = set()
+    if not tse_df.empty: hot_ids.update(tse_df['證券代號'].tolist())
+    if not otc_df.empty: hot_ids.update(otc_df['證券代號'].tolist())
+    return hot_ids
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_inst_data():
     inst_map = {}
     try:
@@ -143,6 +192,57 @@ def get_inst_data():
     return inst_map
 
 # === 4. 雷達分析核心引擎 ===
+
+# 🌟 回歸的 六星大滿配運算 🌟
+def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
+    try:
+        df = df_ticker.copy()
+        if df.empty or len(df) < 65: return None
+        c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
+        v5 = df['Volume'].iloc[-6:-1].mean()
+        if v5 < 1000000: return None
+        
+        df['MA5'] = df['Close'].rolling(5).mean()
+        df['MA20'] = df['Close'].rolling(20).mean()
+        df['MA60'] = df['Close'].rolling(60).mean()
+        
+        if is_bearish and (c < df['MA60'].iloc[-1] or inst_map.get(clean_id, 0) <= 0): return None
+            
+        df = calculate_kd(df)
+        df = calculate_macd(df)
+        
+        return_5d = (c / df['Close'].iloc[-6]) - 1 if len(df) >= 6 else 0
+        bias_20 = (c / df['MA20'].iloc[-1]) - 1
+        is_warning = return_5d > 0.25 or bias_20 > 0.30
+        upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
+        is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
+        
+        s, tags = 0, []
+        if c > df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1]: s+=1; tags.append("[均線多頭]")
+        if df['MA20'].iloc[-1] > df['MA20'].iloc[-2]: s+=1; tags.append("[月線向上]")
+        if v > v5 * 1.5: s+=1; tags.append("[爆量攻擊]")
+        if df['K'].iloc[-1] > df['D'].iloc[-1] and df['K'].iloc[-2] <= df['D'].iloc[-2]: s+=1; tags.append("[KD金叉]")
+        if df['Hist'].iloc[-1] > 0 and df['Hist'].iloc[-1] > df['Hist'].iloc[-2]: s+=1; tags.append("[MACD強勢]")
+        if c > df['High'].iloc[-21:-1].max(): s+=1; tags.append("[創20日新高]")
+        
+        is_higher_low = df['Low'].iloc[-1] >= df['Low'].iloc[-2]
+        is_higher_high = df['High'].iloc[-1] > df['High'].iloc[-2]
+        if is_higher_low and is_higher_high and c > df['MA20'].iloc[-1]:
+            s+=1; tags.append("👑[底底高架構]")
+            
+        if clean_id in hot_list: tags.append("🔥[熱門股]")
+        inst_val = inst_map.get(clean_id, 0)
+        
+        star_display = ("🌟" * s) + ("⚫" * (7 - s)) if s > 0 else "💤 盤整"
+        
+        if s >= 4: # 只回傳四星以上的強勢股
+            return {
+                '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
+                '星等': star_display, '收盤價': round(c, 2), 
+                '法人買賣超(張)': inst_val, '觸發條件': " ".join(tags)
+            }
+    except: return None
+
 def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
     try:
         df = df_ticker.copy()
@@ -169,8 +269,10 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
 
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
-                '收盤價': round(c, 2), '型態': "🔥 剛觸發：三線+零軸" if is_fresh else "🌟 續強：三線+零軸",
-                '法人買賣超(張)': inst_map.get(clean_id, 0)
+                '星等': "🚀 剛觸發三線零軸" if is_fresh else "🌟 續強中",
+                '收盤價': round(c, 2), 
+                '法人買賣超(張)': inst_map.get(clean_id, 0),
+                '觸發條件': "三線多頭 + MACD 零軸之上"
             }
     except: return None
 
@@ -198,8 +300,10 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
-                '收盤價': round(c, 2), '型態': "🚀 壓縮突破 (旱地拔蔥)", 
-                '法人買賣超(張)': inst_map.get(clean_id, 0)
+                '星等': "⚡ 壓縮突破",
+                '收盤價': round(c, 2), 
+                '法人買賣超(張)': inst_map.get(clean_id, 0),
+                '觸發條件': f"爆量 {v/v5_avg:.1f}倍 + 創高"
             }
     except: return None
 
@@ -240,7 +344,7 @@ def plot_beautiful_chart(symbol):
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.3, 0.7])
 
-        # K線與均線 (改用淺色背景：plotly_white)
+        # K線與均線 (淺色背景：plotly_white)
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', 
                                      increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['5MA'], mode='lines', name='5MA', line=dict(color='#F59E0B', width=1.5)), row=1, col=1)
@@ -254,7 +358,6 @@ def plot_beautiful_chart(symbol):
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode='lines', name='MACD', line=dict(color='#3B82F6')), row=2, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="#E5E7EB", opacity=0.8, row=2, col=1)
 
-        # 把 template 改成 plotly_white，背景就會是亮色系的
         fig.update_layout(height=650, template="plotly_white", xaxis_rangeslider_visible=False, 
                           margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
@@ -286,11 +389,13 @@ def us_market_brain():
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V13 淺色明亮版")
+    st.caption("版本：V13.1 終極淺色回歸版")
     st.divider()
 
+    # 🔥 金流榜強勢回歸！
     main_page = st.radio("導航選單", [
-        "🎯 多頭獵殺 (突破/起漲)", 
+        "🎯 多頭獵殺 (突破/起漲)",
+        "🔥 全市場金流榜",  
         "📉 斷頭防護 (空方破底)", 
         "📊 股神專屬看盤室",
         "🌐 全球戰情與總經",
@@ -324,17 +429,19 @@ s_list = st.session_state.watch_list
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title("🎯 多方飆股獵殺雷達")
-    st.info("💡 **白話文說明**：這裡專抓「正準備發動」的強勢股。按下方按鈕，系統會自動幫你掃描自選名單，找出均線多頭、剛帶量突破，或是 MACD 翻紅的好學生。")
+    st.info("💡 **白話文說明**：這裡專抓「正準備發動」的強勢股。系統提供三種演算法，讓你自由選擇要找大滿配好學生，還是剛發動的飆股！")
     
     if is_bearish: 
         st.error("⚠️ **風險警告**：目前大盤跌破月線，操作多單勝率較低，請務必縮小資金部位，切勿盲目追高。")
 
-    col1, col2 = st.columns(2)
-    with col1: btn_breakout = st.button("🚀 掃描：旱地拔蔥 (壓縮突破)", use_container_width=True, type="primary")
-    with col2: btn_ym = st.button("🌟 掃描：三線零軸 (穩定波段)", use_container_width=True)
+    col1, col2, col3 = st.columns(3)
+    with col1: btn_star = st.button("🌟 六星雷達 (經典大滿配)", use_container_width=True)
+    with col2: btn_breakout = st.button("🚀 旱地拔蔥 (壓縮起漲)", use_container_width=True, type="primary")
+    with col3: btn_ym = st.button("📈 三線零軸 (宇明流)", use_container_width=True)
 
-    if btn_breakout or btn_ym:
+    if btn_star or btn_breakout or btn_ym:
         inst_map = get_inst_data()
+        hot_list = get_hot_rank_ids()
         results = []
         progress_bar = st.progress(0, text="📡 正在從雲端載入數據...")
         
@@ -345,7 +452,9 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         progress_bar.progress(30, text="🧠 啟動 AI 演算法交叉比對中...")
         
         with ThreadPoolExecutor(max_workers=5) as ex:
-            if btn_breakout:
+            if btn_star:
+                futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
+            elif btn_breakout:
                 futs = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
             else:
                 futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
@@ -374,14 +483,67 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                 hide_index=True,
                 column_config={
                     "代號": st.column_config.TextColumn("代號", width="small"),
-                    "名稱": st.column_config.TextColumn("名稱", width="medium"),
+                    "名稱": st.column_config.TextColumn("名稱", width="small"),
+                    "星等": st.column_config.TextColumn("型態評估", width="medium"),
                     "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f", width="small"),
-                    "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼 (張)", help="外資與投信單日買賣超合計"),
+                    "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼", help="單日買賣超"),
+                    "觸發條件": st.column_config.TextColumn("觸發條件", width="large")
                 }
             )
+            st.toast("雷達掃描完畢！", icon="✅")
             st.balloons()
         else:
             st.warning("👀 目前盤面靜悄悄，沒有符合嚴格過濾條件的標的。請保持耐心，空手也是一種操作。")
+
+
+# ==========================================
+# 分頁 1.5: 🔥 全市場金流榜 (回歸！)
+# ==========================================
+elif main_page == "🔥 全市場金流榜":
+    st.title("🔥 全市場資金流向與類股權重")
+    st.info("💡 **白話文說明**：這裡顯示全台股市場「當日成交金額最大」的標的，並自動歸類成產業族群，讓你一眼看出市場的熱錢都往哪裡塞！跟著熱錢走，勝率大增。")
+    
+    with st.spinner("🚀 計算資金板塊熱力中..."):
+        tse_df, otc_df = fetch_top15_ranking()
+        if not tse_df.empty or not otc_df.empty:
+            combined_top = pd.concat([tse_df, otc_df], ignore_index=True)
+            combined_top['代號乾淨'] = combined_top['證券代號'].astype(str).str.strip()
+            combined_top['產業族群'] = combined_top['代號乾淨'].map(SECTOR_MAP).fillna("🔥 活躍熱門股")
+            combined_top['成交億'] = (combined_top['成交金額'] / 100000000).round(1)
+            
+            col_chart1, col_chart2 = st.columns([4, 6])
+            with col_chart1:
+                st.subheader("🎯 類股資金佔比")
+                sector_summary = combined_top.groupby('產業族群')['成交億'].sum().reset_index().sort_values(by='成交億', ascending=False)
+                fig_pie = px.pie(sector_summary, values='成交億', names='產業族群', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(template="plotly_white", showlegend=False, margin=dict(t=10, l=10, r=10, b=10), height=350)
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            with col_chart2:
+                st.subheader("🗺️ 資金板塊熱力圖")
+                # 台股熱錢配色，金額越大越紅
+                fig_heat = px.treemap(combined_top, path=[px.Constant("全市場"), '產業族群', '證券名稱'], values='成交億', color='成交億', color_continuous_scale=['#E5E7EB', '#F59E0B', '#FF4B4B'])
+                fig_heat.update_traces(textinfo="label+value")
+                fig_heat.update_layout(template="plotly_white", margin=dict(t=10, l=10, r=10, b=10), height=350)
+                st.plotly_chart(fig_heat, use_container_width=True)
+                
+            st.divider()
+            st.subheader("💰 熱門金流個股排行 (前30大)")
+            display_top = combined_top[['證券代號', '證券名稱', '產業族群', '收盤價', '成交億']].sort_values(by='成交億', ascending=False).reset_index(drop=True)
+            display_top.insert(0, '名次', display_top.index + 1)
+            
+            st.dataframe(
+                display_top, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "成交億": st.column_config.NumberColumn("成交金額 (億元)", format="%.1f")
+                }
+            )
+        else:
+            st.warning("⚠️ 系統連線中或目前盤後暫無排行資料。")
+
 
 # ==========================================
 # 分頁 2: 📉 斷頭防護
@@ -441,7 +603,7 @@ elif main_page == "📊 股神專屬看盤室":
         btn_draw = st.button("📈 繪製高解析度圖表", use_container_width=True, type="primary")
         
         st.markdown("---")
-        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紅線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上水平線。")
+        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 藍紫(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上水平線。")
         
     with col2:
         if btn_draw:
@@ -468,7 +630,6 @@ elif main_page == "🌐 全球戰情與總經":
         fig.add_trace(go.Candlestick(x=twii_df.index, open=twii_df['Open'], high=twii_df['High'], low=twii_df['Low'], close=twii_df['Close'], name="大盤",
                                      increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'))
         fig.add_trace(go.Scatter(x=twii_df.index, y=twii_df['MA20'], line=dict(color='#3B82F6'), name="月線"))
-        # 大盤圖表也設定為淺色背景 plotly_white
         fig.update_layout(template="plotly_white", xaxis_rangeslider_visible=False, margin=dict(l=0,r=0,t=0,b=0), height=400)
         st.plotly_chart(fig, use_container_width=True)
     except:

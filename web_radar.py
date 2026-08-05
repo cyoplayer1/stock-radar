@@ -69,7 +69,6 @@ def safe_get_json_fallback(url, headers):
     try: return safe_get_json(url, headers)
     except: return {}
 
-# 🔥 新增：動態抓取全市場上市櫃股票代號
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_all_tw_stock_data():
     full_ids = []
@@ -105,13 +104,12 @@ def get_all_tw_stock_data():
         return list(DEFAULT_STOCKS.keys()), DEFAULT_STOCKS.copy()
     return full_ids, stock_dict
 
-# V14：優化大數據批次下載，防止 1700 檔股票卡死
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_bulk_yf_data(full_ticker_list, period="1y"):
     valid_tickers = [t for t in full_ticker_list if t]
     if not valid_tickers: return {}
     res_dict = {}
-    chunk_size = 400 # 將 1700 檔切塊，避免 URL 過長或記憶體卡死
+    chunk_size = 400 
     for i in range(0, len(valid_tickers), chunk_size):
         chunk = valid_tickers[i:i+chunk_size]
         try:
@@ -220,7 +218,7 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 4. 雷達分析核心引擎 (內建假突破防禦) ===
+# === 4. 雷達分析核心引擎 ===
 
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
     try:
@@ -228,7 +226,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         if df.empty or len(df) < 65: return None
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5 = df['Volume'].iloc[-6:-1].mean()
-        if v5 < 500000: return None # 排除過度冷門股
+        if v5 < 500000: return None
         
         df['MA5'] = df['Close'].rolling(5).mean()
         df['MA20'] = df['Close'].rolling(20).mean()
@@ -241,7 +239,6 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         
         s, tags = 0, []
         
-        # 🛡️ 假突破防禦判定
         upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
         body = abs(c - df['Open'].iloc[-1])
         is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
@@ -290,14 +287,13 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
         is_macd_above_zero = (df['DIF'].iloc[-1] > 0) and (df['MACD'].iloc[-1] > 0)
         is_macd_golden = (df['DIF'].iloc[-1] > df['MACD'].iloc[-1]) 
 
-        # 🛡️ 假突破防禦判定
         upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
         body = abs(c - df['Open'].iloc[-1])
         is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
 
         if is_three_line_bull and is_macd_above_zero and is_macd_golden:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
-            if is_false_breakout: return None # 直接過濾剔除假突破
+            if is_false_breakout: return None
             
             prev_bull = (df['5MA'].iloc[-2] > df['10MA'].iloc[-2] > df['20MA'].iloc[-2])
             prev_zero = (df['DIF'].iloc[-2] > 0) and (df['MACD'].iloc[-2] > 0)
@@ -332,14 +328,13 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
         is_tight = consolidation_pct < 0.08 
         is_vol_boom = v > (v5_avg * 2.0)
         
-        # 🛡️ 假突破防禦判定
         upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
         body = abs(c - df['Open'].iloc[-1])
         is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
 
         if is_bull_trend and is_tight and is_breaking_high and is_vol_boom:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
-            if is_false_breakout: return None # 嚴格防範假突破
+            if is_false_breakout: return None
 
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
@@ -387,14 +382,12 @@ def plot_beautiful_chart(symbol):
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.3, 0.7])
 
-        # K線與均線 (淺色背景：plotly_white)
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='K線', 
                                      increasing_line_color='#FF4B4B', decreasing_line_color='#00CC96'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['5MA'], mode='lines', name='5MA', line=dict(color='#F59E0B', width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['10MA'], mode='lines', name='10MA', line=dict(color='#3B82F6', width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['20MA'], mode='lines', name='20MA', line=dict(color='#8B5CF6', width=2)), row=1, col=1)
 
-        # MACD 副圖
         colors = np.where(df['Hist'] > 0, '#FF4B4B', '#00CC96')
         fig.add_trace(go.Bar(x=df.index, y=df['Hist'], name='MACD柱', marker_color=colors), row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['DIF'], mode='lines', name='DIF', line=dict(color='#F59E0B')), row=2, col=1)
@@ -432,10 +425,9 @@ def us_market_brain():
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V14.0 全市場掃描旗艦版")
+    st.caption("版本：V14.0 雙劍合璧版")
     st.divider()
 
-    # 🔥 掃描範圍選擇器 (全市場 vs 自選庫)
     st.subheader("🎯 掃描範圍設定")
     scan_mode = st.radio("雷達引擎掃描目標：", ["自選監控庫 (快速)", "全市場上市櫃 (約1700檔)"], help="全市場掃描約需 1-2 分鐘，請耐心等候。")
     st.divider()
@@ -484,21 +476,25 @@ else:
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
-    st.info("💡 **防禦升級**：本雷達已加裝「上影線防禦機制」，一旦發現盤中帶量假突破拉高出貨，系統將自動剔除或標記紅燈警告！")
+    st.info("💡 **防禦與進攻升級**：內建防禦假突破。點擊「雙劍合璧」，系統將為你找出『同時符合六星強勢與三線零軸』的極致無敵好股！")
     
     if is_bearish: 
         st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！假突破機率大增，請務必縮小資金部位，切勿盲目追高。")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1: btn_star = st.button("🌟 六星雷達 (經典大滿配)", use_container_width=True)
-    with col2: btn_breakout = st.button("🚀 旱地拔蔥 (壓縮起漲)", use_container_width=True, type="primary")
-    with col3: btn_ym = st.button("📈 三線零軸 (宇明流)", use_container_width=True)
+    with col2: btn_ym = st.button("📈 三線零軸 (宇明流)", use_container_width=True)
+    
+    col3, col4 = st.columns(2)
+    with col3: btn_breakout = st.button("🚀 旱地拔蔥 (壓縮起漲)", use_container_width=True)
+    # 🔥 新增：雙劍合璧按鈕
+    with col4: btn_overlap = st.button("⚔️ 雙劍合璧 (六星 + 宇明流重疊)", use_container_width=True, type="primary")
 
-    if btn_star or btn_breakout or btn_ym:
+    if btn_star or btn_breakout or btn_ym or btn_overlap:
         inst_map = get_inst_data()
         hot_list = get_hot_rank_ids()
         results = []
-        progress_bar = st.progress(0, text=f"📡 正在從雲端載入 {len(s_list)} 檔標的數據 (全市場掃描較久請稍候)...")
+        progress_bar = st.progress(0, text=f"📡 正在從雲端載入 {len(s_list)} 檔標的數據 (全市場掃描較久請耐心等候)...")
         
         full_ids = [CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") for t in s_list]
         bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
@@ -507,16 +503,50 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         progress_bar.progress(50, text="🧠 啟動 AI 演算法交叉比對中 (假突破濾網已開啟)...")
         
         with ThreadPoolExecutor(max_workers=5) as ex:
-            if btn_star:
-                futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
-            elif btn_breakout:
-                futs = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+            if btn_overlap:
+                # 雙劍合璧：同時跑兩套演算法
+                futs_star = {ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish): t for t in valid_list}
+                futs_ym = {ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish): t for t in valid_list}
+                
+                res_star_list, res_ym_list = [], []
+                total_tasks = len(futs_star) + len(futs_ym)
+                
+                for i, f in enumerate(as_completed(list(futs_star.keys()) + list(futs_ym.keys()))):
+                    progress_bar.progress(50 + int(50 * (i+1)/total_tasks))
+                    res = f.result()
+                    if res:
+                        if f in futs_star: res_star_list.append(res)
+                        else: res_ym_list.append(res)
+                
+                # 尋找重疊的交集
+                star_dict = {r['代號']: r for r in res_star_list}
+                ym_dict = {r['代號']: r for r in res_ym_list}
+                overlap_ids = set(star_dict.keys()).intersection(set(ym_dict.keys()))
+                
+                for cid in overlap_ids:
+                    s_info = star_dict[cid]
+                    y_info = ym_dict[cid]
+                    results.append({
+                        '代號': cid,
+                        '名稱': s_info['名稱'],
+                        '六星評等': s_info['星等'],
+                        '宇明型態': y_info['星等'], # 宇明掃描器回傳在 '星等' 欄位
+                        '收盤價': s_info['收盤價'],
+                        '法人買賣超(張)': s_info['法人買賣超(張)'],
+                        '綜合觸發條件': f"{s_info['觸發條件']} ➕ {y_info['觸發條件']}"
+                    })
             else:
-                futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
-            
-            for i, f in enumerate(as_completed(futs)):
-                progress_bar.progress(50 + int(50 * (i+1)/len(valid_list)))
-                if f.result(): results.append(f.result())
+                # 單一雷達掃描
+                if btn_star:
+                    futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
+                elif btn_breakout:
+                    futs = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+                else:
+                    futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+                
+                for i, f in enumerate(as_completed(futs)):
+                    progress_bar.progress(50 + int(50 * (i+1)/len(valid_list)))
+                    if f.result(): results.append(f.result())
                 
         progress_bar.empty()
         
@@ -532,25 +562,37 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                     elif val < 0: return 'color: #00CC96; font-weight: bold;'
                 return ''
 
-            styled_df = df_res.style.map(style_dataframe, subset=['法人買賣超(張)', '觸發條件'])
-            
-            st.dataframe(
-                styled_df, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "代號": st.column_config.TextColumn("代號", width="small"),
-                    "名稱": st.column_config.TextColumn("名稱", width="small"),
-                    "星等": st.column_config.TextColumn("型態評估", width="medium"),
-                    "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f", width="small"),
-                    "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼", help="單日買賣超"),
-                    "觸發條件": st.column_config.TextColumn("觸發條件", width="large")
-                }
-            )
-            st.toast("雷達防禦掃描完畢！", icon="🛡️")
+            if btn_overlap:
+                styled_df = df_res.style.map(style_dataframe, subset=['法人買賣超(張)', '綜合觸發條件'])
+                st.dataframe(
+                    styled_df, use_container_width=True, hide_index=True,
+                    column_config={
+                        "代號": st.column_config.TextColumn("代號", width="small"),
+                        "名稱": st.column_config.TextColumn("名稱", width="small"),
+                        "六星評等": st.column_config.TextColumn("六星狀態", width="medium"),
+                        "宇明型態": st.column_config.TextColumn("宇明流狀態", width="medium"),
+                        "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f", width="small"),
+                        "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼", help="單日買賣超"),
+                        "綜合觸發條件": st.column_config.TextColumn("雙重條件", width="large")
+                    }
+                )
+            else:
+                styled_df = df_res.style.map(style_dataframe, subset=['法人買賣超(張)', '觸發條件'])
+                st.dataframe(
+                    styled_df, use_container_width=True, hide_index=True,
+                    column_config={
+                        "代號": st.column_config.TextColumn("代號", width="small"),
+                        "名稱": st.column_config.TextColumn("名稱", width="small"),
+                        "星等": st.column_config.TextColumn("型態評估", width="medium"),
+                        "收盤價": st.column_config.NumberColumn("收盤價", format="%.2f", width="small"),
+                        "法人買賣超(張)": st.column_config.NumberColumn("大戶籌碼", help="單日買賣超"),
+                        "觸發條件": st.column_config.TextColumn("觸發條件", width="large")
+                    }
+                )
+            st.toast("雷達掃描完畢！", icon="🛡️")
             st.balloons()
         else:
-            st.warning("👀 觸發假突破防禦機制！今天有突破動作的股票全部留長上影線，系統已強制過濾。請保持空手。")
+            st.warning("👀 此刻沒有任何一檔股票能通過這般嚴苛的測試。保持空手，不賠就是賺！")
 
 
 # ==========================================

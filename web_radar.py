@@ -99,7 +99,7 @@ def fetch_bulk_yf_data(full_ticker_list, period="1y"):
         return res_dict
     except: return {}
 
-# 🌟 回歸的 KD 指標運算 🌟
+# 🌟 KD 與 MACD 指標運算 🌟
 def calculate_kd(df):
     if len(df) < 9: return df
     df['9_min'] = df['Low'].rolling(window=9).min()
@@ -191,9 +191,8 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 4. 雷達分析核心引擎 ===
+# === 4. 雷達分析核心引擎 (加入假突破防禦) ===
 
-# 🌟 回歸的 六星大滿配運算 🌟
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
     try:
         df = df_ticker.copy()
@@ -211,13 +210,15 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         df = calculate_kd(df)
         df = calculate_macd(df)
         
-        return_5d = (c / df['Close'].iloc[-6]) - 1 if len(df) >= 6 else 0
-        bias_20 = (c / df['MA20'].iloc[-1]) - 1
-        is_warning = return_5d > 0.25 or bias_20 > 0.30
-        upper_shadow_pct = (df['High'].iloc[-1] / c) - 1
-        is_daytrader_trap = (v > v5 * 3) and (upper_shadow_pct > 0.04)
-        
         s, tags = 0, []
+        
+        # 🛡️ 假突破防禦判定
+        upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
+        body = abs(c - df['Open'].iloc[-1])
+        is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
+        if is_false_breakout:
+            tags.append("🚨[假突破警戒]")
+            
         if c > df['MA5'].iloc[-1] > df['MA20'].iloc[-1] > df['MA60'].iloc[-1]: s+=1; tags.append("[均線多頭]")
         if df['MA20'].iloc[-1] > df['MA20'].iloc[-2]: s+=1; tags.append("[月線向上]")
         if v > v5 * 1.5: s+=1; tags.append("[爆量攻擊]")
@@ -235,7 +236,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         
         star_display = ("🌟" * s) + ("⚫" * (7 - s)) if s > 0 else "💤 盤整"
         
-        if s >= 4: # 只回傳四星以上的強勢股
+        if s >= 4: 
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
                 '星等': star_display, '收盤價': round(c, 2), 
@@ -260,8 +261,14 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
         is_macd_above_zero = (df['DIF'].iloc[-1] > 0) and (df['MACD'].iloc[-1] > 0)
         is_macd_golden = (df['DIF'].iloc[-1] > df['MACD'].iloc[-1]) 
 
+        # 🛡️ 假突破防禦判定
+        upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
+        body = abs(c - df['Open'].iloc[-1])
+        is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
+
         if is_three_line_bull and is_macd_above_zero and is_macd_golden:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
+            if is_false_breakout: return None # 留下長上影線，直接過濾剔除
             
             prev_bull = (df['5MA'].iloc[-2] > df['10MA'].iloc[-2] > df['20MA'].iloc[-2])
             prev_zero = (df['DIF'].iloc[-2] > 0) and (df['MACD'].iloc[-2] > 0)
@@ -296,8 +303,15 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
         is_tight = consolidation_pct < 0.08 
         is_vol_boom = v > (v5_avg * 2.0)
         
+        # 🛡️ 假突破防禦判定
+        upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
+        body = abs(c - df['Open'].iloc[-1])
+        is_false_breakout = (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02)
+
         if is_bull_trend and is_tight and is_breaking_high and is_vol_boom:
             if is_bearish and inst_map.get(clean_id, 0) <= 0: return None
+            if is_false_breakout: return None # 嚴格防範假突破，直接過濾剔除
+
             return {
                 '代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), 
                 '星等': "⚡ 壓縮突破",
@@ -389,10 +403,9 @@ def us_market_brain():
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V13.1 終極淺色回歸版")
+    st.caption("版本：V13.2 假突破防禦版")
     st.divider()
 
-    # 🔥 金流榜強勢回歸！
     main_page = st.radio("導航選單", [
         "🎯 多頭獵殺 (突破/起漲)",
         "🔥 全市場金流榜",  
@@ -429,10 +442,10 @@ s_list = st.session_state.watch_list
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title("🎯 多方飆股獵殺雷達")
-    st.info("💡 **白話文說明**：這裡專抓「正準備發動」的強勢股。系統提供三種演算法，讓你自由選擇要找大滿配好學生，還是剛發動的飆股！")
+    st.info("💡 **防禦升級**：本雷達已加裝「上影線防禦機制」，一旦發現盤中帶量假突破拉高出貨，系統將自動剔除或標記紅燈警告！")
     
     if is_bearish: 
-        st.error("⚠️ **風險警告**：目前大盤跌破月線，操作多單勝率較低，請務必縮小資金部位，切勿盲目追高。")
+        st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！假突破機率大增，請務必縮小資金部位，切勿盲目追高。")
 
     col1, col2, col3 = st.columns(3)
     with col1: btn_star = st.button("🌟 六星雷達 (經典大滿配)", use_container_width=True)
@@ -449,7 +462,7 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         bulk_data_dict = fetch_bulk_yf_data(full_ids, period="1y")
         valid_list = [t for t in s_list if CLEAN_TO_FULL_MAP.get(t, f"{t}.TW") in bulk_data_dict]
         
-        progress_bar.progress(30, text="🧠 啟動 AI 演算法交叉比對中...")
+        progress_bar.progress(30, text="🧠 啟動 AI 演算法交叉比對中 (假突破濾網已開啟)...")
         
         with ThreadPoolExecutor(max_workers=5) as ex:
             if btn_star:
@@ -466,16 +479,18 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         progress_bar.empty()
         
         if results:
-            st.success(f"🎯 漂亮！成功為你捕捉到 **{len(results)}** 檔強勢標的。")
+            st.success(f"🎯 漂亮！成功為你捕捉到 **{len(results)}** 檔通過嚴格過濾的標的。")
             df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=False)
             
-            def color_positive_red_negative_green(val):
+            def style_dataframe(val):
+                if isinstance(val, str) and '🚨' in val:
+                    return 'color: #FF4B4B; font-weight: bold; background-color: #FFE5E5;'
                 if isinstance(val, (int, float)):
                     if val > 0: return 'color: #FF4B4B; font-weight: bold;'
                     elif val < 0: return 'color: #00CC96; font-weight: bold;'
                 return ''
 
-            styled_df = df_res.style.map(color_positive_red_negative_green, subset=['法人買賣超(張)'])
+            styled_df = df_res.style.map(style_dataframe, subset=['法人買賣超(張)', '觸發條件'])
             
             st.dataframe(
                 styled_df, 
@@ -490,14 +505,14 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                     "觸發條件": st.column_config.TextColumn("觸發條件", width="large")
                 }
             )
-            st.toast("雷達掃描完畢！", icon="✅")
+            st.toast("雷達防禦掃描完畢！", icon="🛡️")
             st.balloons()
         else:
-            st.warning("👀 目前盤面靜悄悄，沒有符合嚴格過濾條件的標的。請保持耐心，空手也是一種操作。")
+            st.warning("👀 觸發假突破防禦機制！今天有突破動作的股票全部留長上影線，系統已強制過濾。請保持空手。")
 
 
 # ==========================================
-# 分頁 1.5: 🔥 全市場金流榜 (回歸！)
+# 分頁 1.5: 🔥 全市場金流榜
 # ==========================================
 elif main_page == "🔥 全市場金流榜":
     st.title("🔥 全市場資金流向與類股權重")
@@ -522,7 +537,6 @@ elif main_page == "🔥 全市場金流榜":
                 
             with col_chart2:
                 st.subheader("🗺️ 資金板塊熱力圖")
-                # 台股熱錢配色，金額越大越紅
                 fig_heat = px.treemap(combined_top, path=[px.Constant("全市場"), '產業族群', '證券名稱'], values='成交億', color='成交億', color_continuous_scale=['#E5E7EB', '#F59E0B', '#FF4B4B'])
                 fig_heat.update_traces(textinfo="label+value")
                 fig_heat.update_layout(template="plotly_white", margin=dict(t=10, l=10, r=10, b=10), height=350)
@@ -603,7 +617,7 @@ elif main_page == "📊 股神專屬看盤室":
         btn_draw = st.button("📈 繪製高解析度圖表", use_container_width=True, type="primary")
         
         st.markdown("---")
-        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 藍紫(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上水平線。")
+        st.caption("📚 **判讀小秘訣**：\n* **均線多頭**：黃線(5) > 藍線(10) > 紫線(20)\n* **零軸起飛**：下方柱狀圖由綠轉紅(上漲紅)，且兩條線爬上水平線。")
         
     with col2:
         if btn_draw:

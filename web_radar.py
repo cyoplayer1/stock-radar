@@ -315,7 +315,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         df = calculate_macd(df)
         s, tags = 0, []
         
-        if fugle_active: tags.append("⚡[富果即時]")
+        if fugle_active: tags.append("⚡[極速即時]")
         sector = GLOBAL_SECTOR_MAP.get(clean_id, '未分類')
         if pd.notna(df['BIAS20'].iloc[-1]) and df['BIAS20'].iloc[-1] > 10: tags.append("🥵[乖離偏高]")
         upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
@@ -378,7 +378,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
             
             is_fresh = not ((df['5MA'].iloc[-2] > df['10MA'].iloc[-2] > df['MA20'].iloc[-2]) and (df['DIF'].iloc[-2] > 0) and (df['MACD'].iloc[-2] > 0))
             tags = ["三線多頭 + MACD 零軸之上"]
-            if fugle_active: tags.append("⚡[富果即時]")
+            if fugle_active: tags.append("⚡[極速即時]")
             if pd.notna(df['BIAS20'].iloc[-1]) and df['BIAS20'].iloc[-1] > 10: tags.append("🥵[乖離偏高]")
             if fk_val > 500: tags.append("💰[外資大買]")
             if it_val > 200: tags.append("🏦[投信認養]")
@@ -425,7 +425,7 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
             if (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02): return None
             
             tags_str = f"爆量 {v/v5_avg:.1f}倍 + 創高"
-            if fugle_active: tags_str += " ⚡[富果即時]"
+            if fugle_active: tags_str += " ⚡[極速即時]"
 
             return {'代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), '產業族群': sector, '星等': "⚡ 壓縮突破",
                     '收盤價': round(c, 2), '外資(張)': fk_val, '投信(張)': it_val, '法人買賣超(張)': total_inst, '觸發條件': tags_str}
@@ -488,7 +488,7 @@ def us_market_brain():
         except: st.metric(name, "Error", "-")
 
 
-# === 7. 全域狀態管理與設定 (預設 Fugle Key) ===
+# === 7. 全域狀態管理與設定 (預設 API Key) ===
 FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 if 'fugle_api_key' not in st.session_state: st.session_state.fugle_api_key = FUGLE_API_KEY
 if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
@@ -497,7 +497,7 @@ if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split(
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V19.1 極簡連線版")
+    st.caption("版本：V19.2 紀律作戰版")
     st.divider()
 
     st.subheader("🎯 掃描範圍設定")
@@ -535,17 +535,18 @@ else:
 
 
 # ==========================================
-# 分頁 1: 🎯 多頭獵殺 (V19.1)
+# 分頁 1: 🎯 多頭獵殺 (V19.2 紀律作戰版)
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
     
     active_fugle_key = st.session_state.fugle_api_key if (st.session_state.fugle_api_key and len(s_list) <= 150) else ""
     
+    # 🌟 嚴格紀律風格的系統提示
     if active_fugle_key:
-        st.success("⚡ **富果 (Fugle) 即時連線已啟動**：系統將擷取毫秒級盤中報價覆寫歷史 K 線，助您精準掌握突破點！")
+        st.success("⚡ **極速戰術連線已啟動**：系統強制擷取毫秒級即時報價覆寫 K 線，確保突破判定零誤差。請堅守交易紀律，伺機而動。")
     else:
-        st.info("💡 **提示**：目前為全市場掃描模式。為了保護系統，自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
+        st.info("💡 **系統提示**：目前為大範圍掃描模式。系統依紀律退回標準延遲報價 (約 15-20 分鐘)，避免資料過載。請耐心等候訊號。")
     
     if is_bearish: st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！請嚴格控制資金部位。")
 
@@ -644,7 +645,7 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
 3. 嚴格風險控管：提醒追高乖離風險與具體的停損策略。"""
                 st.code(ai_prompt, language="markdown")
                 
-        else: st.warning("👀 此刻沒有任何股票通過嚴格測試。保持空手！")
+        else: st.warning("👀 此刻沒有任何股票通過嚴格測試。請堅守紀律，保持空手！")
 
 # ==========================================
 # 分頁 8: ⚙️ 自選庫與設定 
@@ -653,7 +654,7 @@ elif main_page == "⚙️ 自選庫與設定":
     st.title("⚙️ 系統設定與自選名單管理")
     
     st.subheader("📝 您的自選監控代號庫")
-    st.info("💡 確保代號使用半形逗號 `,` 隔開。為了保護 API 連線品質，Fugle 即時報價僅支援自選庫總數低於 150 檔時啟動。")
+    st.info("💡 確保代號使用半形逗號 `,` 隔開。為了保護 API 連線品質與系統穩定，極速即時報價僅支援自選庫總數低於 150 檔時啟動。")
     def_tickers = ", ".join(st.session_state.watch_list)
     new_input = st.text_area("", value=def_tickers, height=150)
     

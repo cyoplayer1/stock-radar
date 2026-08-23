@@ -488,8 +488,8 @@ def us_market_brain():
         except: st.metric(name, "Error", "-")
 
 
-# === 7. 全域狀態管理與設定 (動態載入預設 Fugle Key) ===
-FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b" # 備用預設金鑰
+# === 7. 全域狀態管理與設定 (預設 Fugle Key) ===
+FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b"
 if 'fugle_api_key' not in st.session_state: st.session_state.fugle_api_key = FUGLE_API_KEY
 if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
 
@@ -497,7 +497,7 @@ if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split(
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V19.0 毫秒決斷版")
+    st.caption("版本：V19.1 極簡連線版")
     st.divider()
 
     st.subheader("🎯 掃描範圍設定")
@@ -535,7 +535,7 @@ else:
 
 
 # ==========================================
-# 分頁 1: 🎯 多頭獵殺 (V19.0 毫秒即時連線)
+# 分頁 1: 🎯 多頭獵殺 (V19.1)
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
@@ -545,7 +545,7 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
     if active_fugle_key:
         st.success("⚡ **富果 (Fugle) 即時連線已啟動**：系統將擷取毫秒級盤中報價覆寫歷史 K 線，助您精準掌握突破點！")
     else:
-        st.info("💡 **提示**：目前為全市場掃描模式或未設定密鑰。系統自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
+        st.info("💡 **提示**：目前為全市場掃描模式。為了保護系統，自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
     
     if is_bearish: st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！請嚴格控制資金部位。")
 
@@ -652,14 +652,6 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
 elif main_page == "⚙️ 自選庫與設定":
     st.title("⚙️ 系統設定與自選名單管理")
     
-    with st.expander("🔌 API 密鑰設定 (富果 Fugle)", expanded=True):
-        st.markdown("填寫富果 API Token，系統在【自選監控庫】模式下將自動啟用毫秒級即時報價覆寫功能。")
-        temp_key = st.text_input("🔑 Fugle API Token", value=st.session_state.fugle_api_key, type="password", help="可至富果開發者網站免費申請 MarketData API 憑證。")
-        if st.button("💾 綁定 API 密鑰"):
-            st.session_state.fugle_api_key = temp_key.strip()
-            st.success("✅ Fugle 密鑰綁定成功！")
-            
-    st.divider()
     st.subheader("📝 您的自選監控代號庫")
     st.info("💡 確保代號使用半形逗號 `,` 隔開。為了保護 API 連線品質，Fugle 即時報價僅支援自選庫總數低於 150 檔時啟動。")
     def_tickers = ", ".join(st.session_state.watch_list)

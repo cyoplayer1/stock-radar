@@ -25,7 +25,6 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="阿綜專屬：極簡智能雷達", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
-# 🎨 注入客製化 CSS
 st.markdown("""
 <style>
     h1 { color: #1E3A8A; font-weight: 800; font-family: 'Helvetica Neue', sans-serif; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
@@ -67,18 +66,33 @@ def safe_get_json_fallback(url, headers=None):
     try: return safe_get_json(url, headers)
     except: return {}
 
-# 🌟 V18.0 全市場產業類別對照表建置
+# 🌟 V19.0 新增 Fugle 即時報價抓取模組
+def get_fugle_quote(clean_id, api_key):
+    try:
+        url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{clean_id}"
+        headers = {"X-API-KEY": api_key}
+        res = requests.get(url, headers=headers, timeout=2).json()
+        if 'quote' not in res: return None
+        
+        c = res['quote'].get('trade', {}).get('price')
+        if not c: return None
+        
+        o = res['quote'].get('priceOpen', {}).get('price', c)
+        h = res['quote'].get('priceHigh', {}).get('price', c)
+        l = res['quote'].get('priceLow', {}).get('price', c)
+        v = res['quote'].get('total', {}).get('tradeVolume', 0)
+        return {'Open': o, 'High': h, 'Low': l, 'Close': c, 'Volume': v}
+    except: return None
+
 @st.cache_data(ttl=86400*7, show_spinner=False)
 def get_all_sector_map():
     sector_map = DEFAULT_SECTORS.copy()
     try:
-        # 上市產業抓取
         res_twse = safe_get_json_fallback("https://openapi.twse.com.tw/v1/opendata/t187ap03_L")
         if res_twse and isinstance(res_twse, list):
             for item in res_twse: sector_map[item.get('公司代號', '').strip()] = item.get('產業別', '未分類')
     except: pass
     try:
-        # 上櫃產業抓取
         res_tpex = safe_get_json_fallback("https://openapi.tpex.org.tw/v1/web/regular_emerging/t187ap03_O")
         if res_tpex and isinstance(res_tpex, list):
             for item in res_tpex: sector_map[item.get('公司代號', '').strip()] = item.get('產業別', '未分類')
@@ -96,13 +110,11 @@ def get_all_tw_stock_data():
         if tse and 'tables' in tse:
             for t in tse['tables']:
                 if '證券代號' in t.get('fields', []) and '證券名稱' in t.get('fields', []):
-                    idx_c = t['fields'].index('證券代號')
-                    idx_n = t['fields'].index('證券名稱')
+                    idx_c, idx_n = t['fields'].index('證券代號'), t['fields'].index('證券名稱')
                     for row in t['data']:
                         code, name = row[idx_c].strip(), row[idx_n].strip()
                         if len(code) == 4 and code.isdigit():
-                            full_ids.append(f"{code}.TW")
-                            stock_dict[f"{code}.TW"] = name; stock_dict[code] = name
+                            full_ids.append(f"{code}.TW"); stock_dict[f"{code}.TW"] = name; stock_dict[code] = name
     except: pass
     try:
         otc = safe_get_json_fallback("https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php?l=zh-tw&o=json", HEADERS)
@@ -110,8 +122,7 @@ def get_all_tw_stock_data():
         for row in data_otc:
             code, name = str(row[0]).strip(), str(row[1]).strip()
             if len(code) == 4 and code.isdigit():
-                full_ids.append(f"{code}.TWO")
-                stock_dict[f"{code}.TWO"] = name; stock_dict[code] = name
+                full_ids.append(f"{code}.TWO"); stock_dict[f"{code}.TWO"] = name; stock_dict[code] = name
     except: pass
     if not full_ids: return list(DEFAULT_STOCKS.keys()), DEFAULT_STOCKS.copy()
     return full_ids, stock_dict
@@ -121,9 +132,8 @@ def fetch_bulk_yf_data(full_ticker_list, period="1y"):
     valid_tickers = [t for t in full_ticker_list if t]
     if not valid_tickers: return {}
     res_dict = {}
-    chunk_size = 400 
-    for i in range(0, len(valid_tickers), chunk_size):
-        chunk = valid_tickers[i:i+chunk_size]
+    for i in range(0, len(valid_tickers), 400):
+        chunk = valid_tickers[i:i+400]
         try:
             data = yf.download(" ".join(chunk), period=period, threads=True, progress=False)
             if len(chunk) == 1:
@@ -184,8 +194,7 @@ def get_market_breadth():
 # 🌟 技術指標運算 🌟
 def calculate_kd(df):
     if len(df) < 9: return df
-    df['9_min'] = df['Low'].rolling(window=9).min()
-    df['9_max'] = df['High'].rolling(window=9).max()
+    df['9_min'], df['9_max'] = df['Low'].rolling(window=9).min(), df['High'].rolling(window=9).max()
     df['RSV'] = (df['Close'] - df['9_min']) / (df['9_max'] - df['9_min']) * 100
     k_v, d_v, k, d = [], [], 50.0, 50.0
     for rsv in df['RSV']:
@@ -271,11 +280,24 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 4. 雷達分析核心引擎 ===
-def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False):
+# === 4. 雷達分析核心引擎 (V19 升級混血 Fugle 報價) ===
+def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False, fugle_key=""):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 65: return None
+        
+        # ⚡ 觸發 Fugle 毫秒級覆寫引擎
+        fugle_active = False
+        if fugle_key:
+            rt = get_fugle_quote(clean_id, fugle_key)
+            if rt:
+                df.iloc[-1, df.columns.get_loc('Close')] = rt['Close']
+                df.iloc[-1, df.columns.get_loc('Open')] = rt['Open']
+                df.iloc[-1, df.columns.get_loc('High')] = max(df.iloc[-1]['High'], rt['High'])
+                df.iloc[-1, df.columns.get_loc('Low')] = min(df.iloc[-1]['Low'], rt['Low'])
+                df.iloc[-1, df.columns.get_loc('Volume')] = max(df.iloc[-1]['Volume'], rt['Volume'])
+                fugle_active = True
+
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5 = df['Volume'].iloc[-6:-1].mean()
         if v5 < 500000: return None
@@ -295,6 +317,7 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
         df = calculate_macd(df)
         s, tags = 0, []
         
+        if fugle_active: tags.append("⚡[富果即時]")
         sector = GLOBAL_SECTOR_MAP.get(clean_id, '未分類')
         if pd.notna(df['BIAS20'].iloc[-1]) and df['BIAS20'].iloc[-1] > 10: tags.append("🥵[乖離偏高]")
         upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
@@ -320,10 +343,22 @@ def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_
                     '收盤價': round(c, 2), '外資(張)': fk_val, '投信(張)': it_val, '法人買賣超(張)': total_inst, '觸發條件': " ".join(tags)}
     except: return None
 
-def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
+def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False, fugle_key=""):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 60: return None
+        
+        fugle_active = False
+        if fugle_key:
+            rt = get_fugle_quote(clean_id, fugle_key)
+            if rt:
+                df.iloc[-1, df.columns.get_loc('Close')] = rt['Close']
+                df.iloc[-1, df.columns.get_loc('Open')] = rt['Open']
+                df.iloc[-1, df.columns.get_loc('High')] = max(df.iloc[-1]['High'], rt['High'])
+                df.iloc[-1, df.columns.get_loc('Low')] = min(df.iloc[-1]['Low'], rt['Low'])
+                df.iloc[-1, df.columns.get_loc('Volume')] = max(df.iloc[-1]['Volume'], rt['Volume'])
+                fugle_active = True
+
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         if df['Volume'].iloc[-6:-1].mean() < 500000: return None 
 
@@ -345,6 +380,7 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
             
             is_fresh = not ((df['5MA'].iloc[-2] > df['10MA'].iloc[-2] > df['MA20'].iloc[-2]) and (df['DIF'].iloc[-2] > 0) and (df['MACD'].iloc[-2] > 0))
             tags = ["三線多頭 + MACD 零軸之上"]
+            if fugle_active: tags.append("⚡[富果即時]")
             if pd.notna(df['BIAS20'].iloc[-1]) and df['BIAS20'].iloc[-1] > 10: tags.append("🥵[乖離偏高]")
             if fk_val > 500: tags.append("💰[外資大買]")
             if it_val > 200: tags.append("🏦[投信認養]")
@@ -354,10 +390,22 @@ def analyst_three_line_macd_scanner(clean_id, df_ticker, full_id, inst_map, is_b
                     '收盤價': round(c, 2), '外資(張)': fk_val, '投信(張)': it_val, '法人買賣超(張)': total_inst, '觸發條件': " ".join(tags)}
     except: return None
 
-def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False):
+def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish=False, fugle_key=""):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 60: return None
+        
+        fugle_active = False
+        if fugle_key:
+            rt = get_fugle_quote(clean_id, fugle_key)
+            if rt:
+                df.iloc[-1, df.columns.get_loc('Close')] = rt['Close']
+                df.iloc[-1, df.columns.get_loc('Open')] = rt['Open']
+                df.iloc[-1, df.columns.get_loc('High')] = max(df.iloc[-1]['High'], rt['High'])
+                df.iloc[-1, df.columns.get_loc('Low')] = min(df.iloc[-1]['Low'], rt['Low'])
+                df.iloc[-1, df.columns.get_loc('Volume')] = max(df.iloc[-1]['Volume'], rt['Volume'])
+                fugle_active = True
+
         c, v = df['Close'].iloc[-1], df['Volume'].iloc[-1]
         v5_avg = df['Volume'].iloc[-6:-1].mean()
         if v5_avg < 500000: return None
@@ -377,9 +425,12 @@ def ultimate_breakout_scanner(clean_id, df_ticker, full_id, inst_map, is_bearish
             upper_shadow = df['High'].iloc[-1] - max(df['Open'].iloc[-1], c)
             body = abs(c - df['Open'].iloc[-1])
             if (upper_shadow > body * 1.5) and ((df['High'].iloc[-1] - c) / c > 0.02): return None
+            
+            tags_str = f"爆量 {v/v5_avg:.1f}倍 + 創高"
+            if fugle_active: tags_str += " ⚡[富果即時]"
 
             return {'代號': clean_id, '名稱': STOCKS_DICT.get(full_id, clean_id), '產業族群': sector, '星等': "⚡ 壓縮突破",
-                    '收盤價': round(c, 2), '外資(張)': fk_val, '投信(張)': it_val, '法人買賣超(張)': total_inst, '觸發條件': f"爆量 {v/v5_avg:.1f}倍 + 創高"}
+                    '收盤價': round(c, 2), '外資(張)': fk_val, '投信(張)': it_val, '法人買賣超(張)': total_inst, '觸發條件': tags_str}
     except: return None
 
 def bearish_breakdown_scanner(clean_id, df_ticker, full_id, inst_map):
@@ -438,15 +489,20 @@ def us_market_brain():
             else: st.metric(name, "N/A", "-")
         except: st.metric(name, "Error", "-")
 
-# === 7. 側邊欄 (Sidebar) UI ===
+
+# === 7. 全域狀態管理與設定 (動態載入 Fugle Key) ===
+if 'fugle_api_key' not in st.session_state: st.session_state.fugle_api_key = ""
+if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
+
+# === 8. 側邊欄 (Sidebar) UI ===
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V18.0 族群透視版")
+    st.caption("版本：V19.0 毫秒決斷版")
     st.divider()
 
     st.subheader("🎯 掃描範圍設定")
-    scan_mode = st.radio("雷達引擎掃描目標：", ["自選監控庫 (快速)", "全市場上市櫃 (約1700檔)"])
+    scan_mode = st.radio("雷達引擎掃描目標：", ["自選監控庫 (毫秒即時)", "全市場上市櫃 (約1700檔)"])
     st.divider()
 
     main_page = st.radio("導航選單", [
@@ -470,10 +526,6 @@ with st.sidebar:
 
     with st.expander("🌐 美股連動指標", expanded=False): us_market_brain()
 
-# === 8. 動態切換掃描全域變數 ===
-if 'watch_list' not in st.session_state:
-    st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
-
 if scan_mode == "全市場上市櫃 (約1700檔)":
     all_ids, all_dict = get_all_tw_stock_data()
     STOCKS_DICT.update(all_dict)
@@ -484,11 +536,18 @@ else:
 
 
 # ==========================================
-# 分頁 1: 🎯 多頭獵殺 (含板塊族群與AI)
+# 分頁 1: 🎯 多頭獵殺 (V19.0 毫秒即時連線)
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
-    st.info("💡 **V18.0 獨家功能**：全面加入官方「產業族群」解析！掃描結果將為您統計今日主力資金偏好的熱門板塊。")
+    
+    # 判斷是否啟用 Fugle
+    active_fugle_key = st.session_state.fugle_api_key if (st.session_state.fugle_api_key and len(s_list) <= 150) else ""
+    
+    if active_fugle_key:
+        st.success("⚡ **富果 (Fugle) 即時連線已啟動**：系統將擷取毫秒級盤中報價覆寫歷史 K 線，助您精準掌握突破點！")
+    else:
+        st.info("💡 **提示**：您尚未設定 Fugle API Key，或目前為全市場掃描模式。系統將自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
     
     if is_bearish: st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！請嚴格控制資金部位。")
 
@@ -511,8 +570,8 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
         progress_bar.progress(50, text="🧠 啟動 AI 演算法交叉比對中...")
         with ThreadPoolExecutor(max_workers=5) as ex:
             if btn_overlap:
-                futs_star = {ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish): t for t in valid_list}
-                futs_ym = {ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish): t for t in valid_list}
+                futs_star = {ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish, active_fugle_key): t for t in valid_list}
+                futs_ym = {ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish, active_fugle_key): t for t in valid_list}
                 res_star_list, res_ym_list = [], []
                 for i, f in enumerate(as_completed(list(futs_star.keys()) + list(futs_ym.keys()))):
                     progress_bar.progress(50 + int(50 * (i+1)/(len(futs_star)+len(futs_ym))))
@@ -531,9 +590,9 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                         '法人買賣超(張)': star_dict[cid]['法人買賣超(張)'], '綜合觸發條件': f"{star_dict[cid]['觸發條件']} ➕ {ym_dict[cid]['觸發條件']}"
                     })
             else:
-                if btn_star: futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish) for t in valid_list]
-                elif btn_ym: futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
-                elif btn_breakout: futs = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish) for t in valid_list]
+                if btn_star: futs = [ex.submit(analyze_stock_score_v2, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, hot_list, is_bearish, active_fugle_key) for t in valid_list]
+                elif btn_ym: futs = [ex.submit(analyst_three_line_macd_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish, active_fugle_key) for t in valid_list]
+                elif btn_breakout: futs = [ex.submit(ultimate_breakout_scanner, t, bulk_data_dict[CLEAN_TO_FULL_MAP.get(t, f"{t}.TW")], CLEAN_TO_FULL_MAP.get(t, f"{t}.TW"), inst_map, is_bearish, active_fugle_key) for t in valid_list]
                 for i, f in enumerate(as_completed(futs)):
                     progress_bar.progress(50 + int(50 * (i+1)/len(valid_list)))
                     if f.result(): results.append(f.result())
@@ -544,7 +603,6 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
             st.success(f"🎯 成功捕捉到 **{len(results)}** 檔通過過濾的標的！")
             df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=False)
             
-            # 📊 V18.0 獨家功能：產業族群熱力分佈圖
             st.subheader("📊 今日飆股族群分佈 (資金風向球)")
             sector_counts = df_res['產業族群'].value_counts().reset_index()
             sector_counts.columns = ['產業族群', '檔數']
@@ -554,11 +612,9 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
             st.plotly_chart(fig_pie, use_container_width=True)
             
             st.divider()
-
-            # 報表呈現
             def style_dataframe(val):
                 if isinstance(val, str) and '🚨' in val: return 'color: #FF4B4B; font-weight: bold; background-color: #FFE5E5;'
-                if isinstance(val, str) and '🥵' in val: return 'color: #F59E0B; font-weight: bold;'
+                if isinstance(val, str) and ('🥵' in val or '⚡' in val): return 'color: #F59E0B; font-weight: bold;'
                 if isinstance(val, str) and ('💰' in val or '🏦' in val or '🤝' in val): return 'color: #FF4B4B; font-weight: bold;'
                 if isinstance(val, (int, float)):
                     if val > 0: return 'color: #FF4B4B; font-weight: bold;'
@@ -570,15 +626,12 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
             st.balloons()
             
             with st.expander("🤖 生成 AI 盤後戰略報告提示詞 (Prompt)", expanded=False):
-                st.info("複製下方整段文字貼給 AI，讓它為你規劃明日操盤建議！")
                 top_stocks_str = ""
                 for idx, row in df_res.head(5).iterrows():
                     cond = row.get('綜合觸發條件', row.get('觸發條件', ''))
                     top_stocks_str += f"- {row['名稱']}({row['代號']}) [{row['產業族群']}] / 收盤價:{row['收盤價']} / 法人買超:{row['法人買賣超(張)']}張 / 觸發: {cond}\n"
-                
                 macro_data = get_macro_data_dynamic()
                 ai_prompt = f"""你是一位擁有20年經驗的量化交易員。請根據以下我今天透過「極簡智能雷達」掃描出的數據，撰寫【明日交易戰略報告】。
-
 【大環境狀態】
 - 大盤狀態：{tw_status}
 - VIX恐慌指數：{macro_data.get("VIX 恐慌指數", {}).get('val', 'N/A')}
@@ -595,32 +648,42 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                 
         else: st.warning("👀 此刻沒有任何股票通過嚴格測試。保持空手！")
 
-# ==========================================
-# 分頁 7: 🧮 資金與風險控管
-# ==========================================
-elif main_page == "🧮 資金與風險控管":
-    st.title("🧮 資金部位計算機 (固定風險模型)")
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.subheader("1. 設定交易參數")
-        total_capital = st.number_input("💰 總交易本金 (元)", min_value=10000, value=1000000, step=10000)
-        risk_pct = st.slider("🛡️ 單筆最大虧損承受度 (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
-        entry_price = st.number_input("📈 預計進場價 (元)", min_value=1.0, value=100.0, step=0.5)
-        stop_loss_price = st.number_input("🛑 嚴格停損價 (元)", min_value=1.0, value=90.0, step=0.5)
-    with col2:
-        st.subheader("2. 系統運算結果")
-        if entry_price <= stop_loss_price: st.error("⚠️ 停損價必須低於進場價。")
-        else:
-            max_loss = total_capital * (risk_pct / 100)
-            max_shares = max_loss // (entry_price - stop_loss_price)
-            total_cost = max_shares * entry_price
-            st.metric("最大允許虧損", f"NT$ {max_loss:,.0f}")
-            st.markdown(f"### 👉 建議購買： **{max_shares:,.0f} 股** ({max_shares / 1000:.1f} 張)")
-            if total_cost > total_capital: st.warning(f"⚠️ 花費 NT$ {total_cost:,.0f}，已超出總本金！")
-            else: st.success(f"✅ 總花費 NT$ {total_cost:,.0f}，佔總資金 {(total_cost/total_capital)*100:.1f}%。")
 
 # ==========================================
-# 其餘分頁 (高股息/金流榜/斷頭防護/看盤室/總經/設定) 皆完整保留
+# 分頁 8: ⚙️ 自選庫與設定 (新增 Fugle 綁定)
+# ==========================================
+elif main_page == "⚙️ 自選庫與設定":
+    st.title("⚙️ 系統設定與自選名單管理")
+    
+    with st.expander("🔌 API 密鑰設定 (富果 Fugle)", expanded=True):
+        st.markdown("填寫富果 API Token，系統在【自選監控庫】模式下將自動啟用毫秒級即時報價覆寫功能。")
+        temp_key = st.text_input("🔑 Fugle API Token", value=st.session_state.fugle_api_key, type="password", help="可至富果開發者網站免費申請 MarketData API 憑證。")
+        if st.button("💾 綁定 API 密鑰"):
+            st.session_state.fugle_api_key = temp_key.strip()
+            st.success("✅ Fugle 密鑰綁定成功！")
+            
+    st.divider()
+    st.subheader("📝 您的自選監控代號庫")
+    st.info("💡 確保代號使用半形逗號 `,` 隔開。為了保護 API 連線品質，Fugle 即時報價僅支援自選庫總數低於 150 檔時啟動。")
+    def_tickers = ", ".join(st.session_state.watch_list)
+    new_input = st.text_area("", value=def_tickers, height=150)
+    
+    if st.button("💾 儲存自選名單", type="primary"):
+        new_list = [t.strip() for t in new_input.replace('，',',').split(',') if t.strip()]
+        st.session_state.watch_list = new_list
+        st.success(f"✅ 更新成功！共監控 {len(new_list)} 檔。")
+        time.sleep(1)
+        st.rerun()
+
+    st.divider()
+    st.subheader("🧹 系統優化")
+    if st.button("清除系統快取 (排除資料不同步問題)", use_container_width=False):
+        st.cache_data.clear()
+        st.toast("快取已清除！", icon="🧹")
+
+
+# ==========================================
+# 其餘分頁 (高股息/金流榜/斷頭防護/看盤室/總經/風險) 皆完整保留
 # ==========================================
 elif main_page == "💰 高股息與 ETF 尋寶":
     st.title("💰 穩健防禦：高股息/ETF 尋寶雷達")
@@ -702,17 +765,23 @@ elif main_page == "🌐 全球戰情與總經":
         st.plotly_chart(fig, use_container_width=True)
     except: st.warning("無法載入大盤走勢圖。")
 
-elif main_page == "⚙️ 自選庫與設定":
-    st.title("⚙️ 系統設定與自選名單管理")
-    def_tickers = ", ".join(st.session_state.watch_list)
-    new_input = st.text_area("📝 您的監控代號庫：", value=def_tickers, height=150)
-    if st.button("💾 儲存並更新名單", type="primary"):
-        new_list = [t.strip() for t in new_input.replace('，',',').split(',') if t.strip()]
-        st.session_state.watch_list = new_list
-        st.success(f"✅ 更新成功！共監控 {len(new_list)} 檔。")
-        time.sleep(1)
-        st.rerun()
-    st.divider()
-    if st.button("清除系統快取 (排除資料不同步問題)", use_container_width=False):
-        st.cache_data.clear()
-        st.toast("快取已清除！", icon="🧹")
+elif main_page == "🧮 資金與風險控管":
+    st.title("🧮 資金部位計算機 (固定風險模型)")
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader("1. 設定交易參數")
+        total_capital = st.number_input("💰 總交易本金 (元)", min_value=10000, value=1000000, step=10000)
+        risk_pct = st.slider("🛡️ 單筆最大虧損承受度 (%)", min_value=0.5, max_value=5.0, value=2.0, step=0.1)
+        entry_price = st.number_input("📈 預計進場價 (元)", min_value=1.0, value=100.0, step=0.5)
+        stop_loss_price = st.number_input("🛑 嚴格停損價 (元)", min_value=1.0, value=90.0, step=0.5)
+    with col2:
+        st.subheader("2. 系統運算結果")
+        if entry_price <= stop_loss_price: st.error("⚠️ 停損價必須低於進場價。")
+        else:
+            max_loss = total_capital * (risk_pct / 100)
+            max_shares = max_loss // (entry_price - stop_loss_price)
+            total_cost = max_shares * entry_price
+            st.metric("最大允許虧損", f"NT$ {max_loss:,.0f}")
+            st.markdown(f"### 👉 建議購買： **{max_shares:,.0f} 股** ({max_shares / 1000:.1f} 張)")
+            if total_cost > total_capital: st.warning(f"⚠️ 花費 NT$ {total_cost:,.0f}，已超出總本金！")
+            else: st.success(f"✅ 總花費 NT$ {total_cost:,.0f}，佔總資金 {(total_cost/total_capital)*100:.1f}%。")

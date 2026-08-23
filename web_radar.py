@@ -18,7 +18,9 @@ import numpy as np
 try:
     from tenacity import retry, wait_exponential, stop_after_attempt
 except ImportError:
-    st.error("⚠️ 缺少 tenacity 套件，請執行: pip install tenacity")
+    st.error("⚠️ 缺少 tenacity 套件！")
+    st.info("💡 解法：本機請執行 `pip install tenacity`；若是部署在 Streamlit Cloud，請確認 requirements.txt 內有加入 `tenacity`。")
+    st.stop()  # 加上這行，強制停止畫面渲染，避免後續程式碼找不到 retry 而大當機
 
 # === 1. 系統環境設定與版面美化 ===
 warnings.filterwarnings("ignore")

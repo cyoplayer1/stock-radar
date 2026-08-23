@@ -3,6 +3,4 @@ yfinance
 pandas
 plotly
 requests
-gTTS
-aiohttp
-streamlit-autorefresh
+tenacity

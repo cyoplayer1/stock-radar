@@ -66,7 +66,6 @@ def safe_get_json_fallback(url, headers=None):
     try: return safe_get_json(url, headers)
     except: return {}
 
-# 🌟 V19.0 新增 Fugle 即時報價抓取模組
 def get_fugle_quote(clean_id, api_key):
     try:
         url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{clean_id}"
@@ -280,13 +279,12 @@ def get_inst_data():
     except: pass
     return inst_map
 
-# === 4. 雷達分析核心引擎 (V19 升級混血 Fugle 報價) ===
+# === 4. 雷達分析核心引擎 ===
 def analyze_stock_score_v2(clean_id, df_ticker, full_id, inst_map, hot_list, is_bearish=False, fugle_key=""):
     try:
         df = df_ticker.copy()
         if df.empty or len(df) < 65: return None
         
-        # ⚡ 觸發 Fugle 毫秒級覆寫引擎
         fugle_active = False
         if fugle_key:
             rt = get_fugle_quote(clean_id, fugle_key)
@@ -490,8 +488,9 @@ def us_market_brain():
         except: st.metric(name, "Error", "-")
 
 
-# === 7. 全域狀態管理與設定 (動態載入 Fugle Key) ===
-if 'fugle_api_key' not in st.session_state: st.session_state.fugle_api_key = ""
+# === 7. 全域狀態管理與設定 (動態載入預設 Fugle Key) ===
+FUGLE_API_KEY = "54f80721-6cad-4ec9-9679-c5a315e7b00b" # 備用預設金鑰
+if 'fugle_api_key' not in st.session_state: st.session_state.fugle_api_key = FUGLE_API_KEY
 if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split('.')[0] for k in DEFAULT_STOCKS.keys()]
 
 # === 8. 側邊欄 (Sidebar) UI ===
@@ -541,13 +540,12 @@ else:
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
     
-    # 判斷是否啟用 Fugle
     active_fugle_key = st.session_state.fugle_api_key if (st.session_state.fugle_api_key and len(s_list) <= 150) else ""
     
     if active_fugle_key:
         st.success("⚡ **富果 (Fugle) 即時連線已啟動**：系統將擷取毫秒級盤中報價覆寫歷史 K 線，助您精準掌握突破點！")
     else:
-        st.info("💡 **提示**：您尚未設定 Fugle API Key，或目前為全市場掃描模式。系統將自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
+        st.info("💡 **提示**：目前為全市場掃描模式或未設定密鑰。系統自動退回 `yfinance` 標準模式 (約延遲 15-20 分鐘)。")
     
     if is_bearish: st.error("⚠️ **大盤環境警告**：目前大盤跌破月線，操作多單勝率極低！請嚴格控制資金部位。")
 
@@ -648,9 +646,8 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
                 
         else: st.warning("👀 此刻沒有任何股票通過嚴格測試。保持空手！")
 
-
 # ==========================================
-# 分頁 8: ⚙️ 自選庫與設定 (新增 Fugle 綁定)
+# 分頁 8: ⚙️ 自選庫與設定 
 # ==========================================
 elif main_page == "⚙️ 自選庫與設定":
     st.title("⚙️ 系統設定與自選名單管理")
@@ -681,9 +678,8 @@ elif main_page == "⚙️ 自選庫與設定":
         st.cache_data.clear()
         st.toast("快取已清除！", icon="🧹")
 
-
 # ==========================================
-# 其餘分頁 (高股息/金流榜/斷頭防護/看盤室/總經/風險) 皆完整保留
+# 其餘分頁 (高股息/金流榜/斷頭防護/看盤室/總經/風險) 
 # ==========================================
 elif main_page == "💰 高股息與 ETF 尋寶":
     st.title("💰 穩健防禦：高股息/ETF 尋寶雷達")

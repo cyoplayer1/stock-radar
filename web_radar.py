@@ -497,7 +497,7 @@ if 'watch_list' not in st.session_state: st.session_state.watch_list = [k.split(
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10061/10061803.png", width=60)
     st.markdown("## 📡 智能軍規雷達")
-    st.caption("版本：V19.2 紀律作戰版")
+    st.caption("版本：V19.3 族群明細版")
     st.divider()
 
     st.subheader("🎯 掃描範圍設定")
@@ -535,7 +535,7 @@ else:
 
 
 # ==========================================
-# 分頁 1: 🎯 多頭獵殺 (V19.2 紀律作戰版)
+# 分頁 1: 🎯 多頭獵殺 (V19.3)
 # ==========================================
 if main_page == "🎯 多頭獵殺 (突破/起漲)":
     st.title(f"🎯 多方飆股獵殺雷達 ({scan_mode})")
@@ -602,13 +602,25 @@ if main_page == "🎯 多頭獵殺 (突破/起漲)":
             st.success(f"🎯 成功捕捉到 **{len(results)}** 檔通過過濾的標的！")
             df_res = pd.DataFrame(results).sort_values(by='法人買賣超(張)', ascending=False)
             
-            st.subheader("📊 今日飆股族群分佈 (資金風向球)")
+            # 📊 圓餅圖與成分股明細並排顯示
+            st.subheader("📊 今日飆股族群分佈與明細")
+            col_pie, col_list = st.columns([4, 6])
+            
             sector_counts = df_res['產業族群'].value_counts().reset_index()
             sector_counts.columns = ['產業族群', '檔數']
-            fig_pie = px.pie(sector_counts, values='檔數', names='產業族群', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_pie.update_layout(height=350, margin=dict(t=20, b=20, l=20, r=20), showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with col_pie:
+                fig_pie = px.pie(sector_counts, values='檔數', names='產業族群', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                fig_pie.update_layout(height=350, margin=dict(t=20, b=20, l=20, r=20), showlegend=False)
+                st.plotly_chart(fig_pie, use_container_width=True)
+                
+            with col_list:
+                st.markdown("<br>", unsafe_allow_html=True)
+                for sector in sector_counts['產業族群']:
+                    stocks_in_sector = df_res[df_res['產業族群'] == sector]
+                    stock_labels = [f"{r['名稱']}({r['代號']})" for _, r in stocks_in_sector.iterrows()]
+                    st.markdown(f"🔹 **{sector}** ({len(stocks_in_sector)}檔)：" + "、".join(stock_labels))
             
             st.divider()
             def style_dataframe(val):
